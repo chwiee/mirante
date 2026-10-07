@@ -825,9 +825,13 @@
       const llm = up.llm.map((n) => row(`LLM · ${n}`, `${base}/p/${a}/llm/${n}`, 'troque a URL base do LLM por esta (Ollama: /api/chat · OpenAI: /v1/chat/completions)')).join('');
       const mcp = up.mcp.map((n) => row(`MCP · ${n}`, `${base}/p/${a}/mcp/${n}`, 'troque o endpoint do MCP server por este')).join('');
       const ev = row('Eventos (SDK)', `${base}/v1/events`, 'só se for instrumentar por código');
+      const ia = `<h4>Pedir para a IA fazer (Claude Code, Kiro…)</h4>
+        ${row('Prompt', `Leia a instrução com \`curl -s ${base}/ia/integrar-mirante.md\` e integre o mirante neste agente seguindo-a. Nome do agente no painel: ${agent || 'meu-agente'}.`, 'cole no assistente, dentro do repositório do agente')}
+        ${row('Claude Code', `mkdir -p .claude/skills/integrar-mirante && curl -s ${base}/ia/claude/SKILL.md -o .claude/skills/integrar-mirante/SKILL.md`, 'instala como skill no repo: depois basta pedir "integra o mirante"')}
+        ${row('Kiro', `mkdir -p .kiro/steering && curl -s ${base}/ia/kiro/mirante.md -o .kiro/steering/mirante.md`, 'instala como steering manual: no chat, use #mirante')}`;
       $('cx-urls').innerHTML = (llm || mcp)
-        ? `<h4>Modo proxy — zero código</h4>${llm}${mcp}<h4>Modo SDK</h4>${ev}`
-        : `<p class="cx-note">Este mirante ainda não tem upstreams de proxy. Suba com <code>--llm nome=URL</code> e/ou <code>--mcp server=URL</code> (ou <code>MIRANTE_LLM</code>/<code>MIRANTE_MCP</code>).</p><h4>Modo SDK</h4>${ev}`;
+        ? `${ia}<h4>Ou faça à mão — modo proxy, zero código</h4>${llm}${mcp}<h4>Modo SDK</h4>${ev}`
+        : `${ia}<p class="cx-note">Este mirante ainda não tem upstreams de proxy. Suba com <code>--llm nome=URL</code> e/ou <code>--mcp server=URL</code> (ou <code>MIRANTE_LLM</code>/<code>MIRANTE_MCP</code>).</p><h4>Modo SDK</h4>${ev}`;
     };
     openDrawer('<h3>Conectar agente</h3><div class="meta">o agente só troca URLs — nenhuma linha de código</div>',
       `<div class="cx-field"><label for="cx-agent">Nome do agente (como vai aparecer no mapa)</label><input id="cx-agent" value="meu-agente" autocomplete="off" spellcheck="false"></div>

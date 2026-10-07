@@ -82,6 +82,7 @@ Os upstreams ficam no ConfigMap, em `MIRANTE_LLM` e `MIRANTE_MCP`. Para adiciona
 | `--redact-keys` | `MIRANTE_REDACT_KEYS` | password, secret, token, api_key, authorization… | regex de chaves JSON mascaradas como `***` antes de chegar ao painel |
 | `--ingest-token` | `MIRANTE_INGEST_TOKEN` | aberto | bearer exigido em `POST /v1/events` |
 | `--events-url` | `MIRANTE_EVENTS_URL` | — | modo sidecar: manda eventos para o central em vez de servir o painel |
+| `--public-url` | `MIRANTE_PUBLIC_URL` | deduzida da requisição | URL que os agentes usam para chegar ao mirante; vai nas instruções para IA em `/ia` |
 | `--min-confidence` | — | `0.6` | abaixo disso, a chamada fica marcada como incerteza |
 | `--max-runs` | — | `500` | quantos runs ficam em memória |
 
@@ -127,7 +128,41 @@ Só a URL dos MCP servers:
 
 Para ver também as decisões do Claude (incluindo o *thinking*), instrumente com o SDK (seção 9). Os dois modos convivem no mesmo painel.
 
-### 4.4 Qualquer outro agente
+### 4.4 Pedir para a IA fazer (Claude Code, Kiro…)
+
+O próprio mirante serve uma instrução escrita **para assistentes de IA**, já preenchida com a URL dele e os upstreams configurados:
+
+| URL | formato |
+|---|---|
+| `<mirante>/ia` | índice com os comandos abaixo prontos |
+| `<mirante>/ia/integrar-mirante.md` | instrução em Markdown puro |
+| `<mirante>/ia/claude/SKILL.md` | skill do Claude Code |
+| `<mirante>/ia/kiro/mirante.md` | steering do Kiro (inclusão manual) |
+
+**Uso avulso.** Dentro do repositório do agente, peça ao assistente:
+
+> Leia a instrução com `curl -s http://<mirante>/ia/integrar-mirante.md` e integre o mirante neste agente seguindo-a.
+
+**Deixar instalado no repositório.** Com isso, o assistente acha a instrução sozinho da próxima vez:
+
+```bash
+# Claude Code: skill (dispara com "integra o mirante")
+mkdir -p .claude/skills/integrar-mirante && curl -s http://<mirante>/ia/claude/SKILL.md -o .claude/skills/integrar-mirante/SKILL.md
+# Kiro: steering manual (no chat, use #mirante)
+mkdir -p .kiro/steering && curl -s http://<mirante>/ia/kiro/mirante.md -o .kiro/steering/mirante.md
+```
+
+O botão **"+ Conectar agente"** no painel mostra esses comandos prontos para copiar. A instrução leva o assistente a:
+
+1. descobrir como o agente fala com LLM e MCP;
+2. escolher o modo;
+3. mudar só a config (ou, se precisar, instrumentar com os clientes de referência Python/TypeScript, testados contra o mirante real);
+4. **verificar no próprio mirante** que o run chegou;
+5. entregar o diff com o valor antigo e o novo, para facilitar o rollback.
+
+Sem acesso ao mirante rodando, há uma cópia estática em [`docs/ia/`](ia/). Configure `--public-url` (ou `MIRANTE_PUBLIC_URL`) quando a URL que os agentes usam for diferente da URL do telão.
+
+### 4.5 Qualquer outro agente
 
 Se ele fala Ollama ou OpenAI-compatible e/ou MCP Streamable HTTP, o procedimento é o mesmo: troque as URLs. Exemplo mínimo e completo, que **não importa nada do mirante**: [`examples/agente-minimo`](../examples/agente-minimo/main.go).
 

@@ -373,3 +373,15 @@ func TestConectarJaApareceNoMapa(t *testing.T) {
 	}
 	t.Fatalf("topologia: %+v", r.srv.Store.Topology())
 }
+
+func TestUpstreamsExpoeURLSemCredencial(t *testing.T) {
+	p := New(Config{LLM: map[string]string{"ollama": "http://ollama:11434"}, MCP: map[string]string{"k8s": "https://user:s3nh4@hub:8443/mcp"}, Emit: func(*event.Event) {}})
+	defer p.Close()
+	up := p.Upstreams()
+	if up["llm_urls"].(map[string]string)["ollama"] != "http://ollama:11434" {
+		t.Fatalf("%v", up)
+	}
+	if got := up["mcp_urls"].(map[string]string)["k8s"]; got != "https://hub:8443/mcp" {
+		t.Fatalf("credencial vazou ou URL errada: %q", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -156,5 +157,46 @@ func TestPublishEmOrdemComIngestConcorrente(t *testing.T) {
 			t.Fatalf("seq fora de ordem: %d depois de %d", u.Seq, last)
 		}
 		last = u.Seq
+	}
+}
+
+func TestInstrucaoIAServidaComURLReal(t *testing.T) {
+	s, ts := newServer("")
+	defer ts.Close()
+	s.Upstreams = func() map[string]any {
+		return map[string]any{"llm_urls": map[string]string{"ollama": "http://ollama:11434"}, "mcp_urls": map[string]string{}, "inject_reasoning": true}
+	}
+	get := func(path string, hdr map[string]string) string {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/markdown") {
+			t.Fatalf("%s: %d %s", path, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+
+	md := get("/ia/integrar-mirante.md", nil)
+	if !strings.Contains(md, "Gerado pelo mirante em **"+ts.URL+"**") || !strings.Contains(md, "`ollama` → `http://ollama:11434`") {
+		t.Fatalf("doc viva sem URL/upstreams reais:\n%.400s", md)
+	}
+	// atrás de Ingress TLS, a URL tem que ser a pública, não a do pod
+	md = get("/ia/claude/SKILL.md", map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "mirante.empresa.com"})
+	if !strings.HasPrefix(md, "---\nname: integrar-mirante") || !strings.Contains(md, "https://mirante.empresa.com/p/<agente>/llm/ollama") {
+		t.Fatalf("skill atrás de ingress:\n%.300s", md)
+	}
+	if k := get("/ia/kiro/mirante.md", nil); !strings.HasPrefix(k, "---\ninclusion: manual") {
+		t.Fatal("steering do Kiro sem frontmatter")
+	}
+	s.PublicURL = "http://mirante.observabilidade:8080/"
+	if idx := get("/ia", nil); !strings.Contains(idx, "curl -s http://mirante.observabilidade:8080/ia/claude/SKILL.md -o .claude/skills/integrar-mirante/SKILL.md") {
+		t.Fatalf("índice:\n%s", idx)
 	}
 }

@@ -88,7 +88,26 @@ func (p *Proxy) Upstreams() map[string]any {
 		sort.Strings(out)
 		return out
 	}
-	return map[string]any{"llm": keys(p.cfg.LLM), "mcp": keys(p.cfg.MCP), "inject_reasoning": p.cfg.InjectReasoning}
+	return map[string]any{
+		"llm": keys(p.cfg.LLM), "mcp": keys(p.cfg.MCP),
+		// destino de cada nome: assistentes de IA usam isto para calcular a
+		// URL nova do agente (ex: se o "/v1" fica no agente ou já está aqui)
+		"llm_urls": publicURLs(p.cfg.LLM), "mcp_urls": publicURLs(p.cfg.MCP),
+		"inject_reasoning": p.cfg.InjectReasoning,
+	}
+}
+
+// publicURLs devolve as URLs sem usuário/senha embutidos.
+func publicURLs(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if u, err := url.Parse(v); err == nil && u.User != nil {
+			u.User = nil
+			v = u.String()
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // ---------- LLM ----------

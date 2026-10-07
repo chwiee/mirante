@@ -78,6 +78,7 @@ func main() {
 	inject := flag.Bool("inject-reasoning", os.Getenv("MIRANTE_INJECT_REASONING") == "true", "proxy injeta reason/confidence no schema das tools e remove na resposta")
 	redact := flag.String("redact-keys", envOr("MIRANTE_REDACT_KEYS", proxy.DefaultRedactKeys.String()), "regex de chaves JSON redigidas no proxy (vazio desliga)")
 	eventsURL := flag.String("events-url", os.Getenv("MIRANTE_EVENTS_URL"), "modo sidecar: manda eventos do proxy para este mirante central")
+	publicURL := flag.String("public-url", os.Getenv("MIRANTE_PUBLIC_URL"), "URL pela qual os agentes alcançam este mirante (vai nas instruções para IA em /ia; vazio = deduz da requisição)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -113,6 +114,7 @@ func main() {
 			Store:       store.New(*maxRuns, detect.Config{MinConfidence: *minConf, AmbiguityMargin: *margin, ActionTools: splitList(*actionTools)}),
 			Hub:         hub.New(),
 			IngestToken: *token,
+			PublicURL:   *publicURL,
 			UI:          web.FS,
 			Log:         log,
 		}

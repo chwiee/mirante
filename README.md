@@ -39,6 +39,8 @@ O botão **"+ Conectar agente"** no painel gera essas URLs. O mirante repassa tu
 
 ➡️ **Validar uma implantação:** `./scripts/validar.sh http://<mirante>`
 
+➡️ **Pedir para a IA integrar** (Claude Code, Kiro): o mirante serve a instrução pronta em `/ia`. Ver [guia, seção 4.4](docs/IMPLANTACAO.md#44-pedir-para-a-ia-fazer-claude-code-kiro).
+
 ➡️ **Agente de exemplo que não importa nada do mirante:** [`examples/agente-minimo`](examples/agente-minimo/main.go)
 
 ## Detecção de alucinação
