@@ -1,0 +1,64 @@
+# OPÇÃO B — mirante como SIDECAR dentro do pod do MCP.
+#
+# Mesmo objetivo da opção A (clientes não mudam nada), sem salto de rede extra:
+# o mirante fica no mesmo pod e fala com o MCP por localhost. Escala junto com
+# o MCP (um sidecar por réplica) e não vira ponto único de falha.
+# Diferença: altera o Deployment do MCP (um container a mais) e NÃO corrige o
+# "session not found" de MCP stateful com várias réplicas — o comportamento de
+# sessão fica exatamente como é hoje.
+#
+# Abaixo, o Deployment do ce-k8s-mcp com o sidecar (### = o que foi acrescentado
+# ou mudado). Os eventos vão, assíncronos, para o mirante central; se ele cair,
+# o sidecar descarta eventos e o MCP segue normal.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ce-k8s-mcp
+  namespace: ce
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: ce-k8s-mcp}
+  template:
+    metadata:
+      labels: {app: ce-k8s-mcp}
+    spec:
+      serviceAccountName: ce-k8s-mcp
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: mcp                                   # o MCP, sem nenhuma mudança
+          image: ghcr.io/chwiee/ce-k8s-mcp:latest
+          args: ["--clusters=/etc/ce/clusters.yaml"]
+          ports: [{name: http, containerPort: 8080}]
+          # … resto do container igual ao atual …
+
+        - name: mirante                               ### sidecar
+          image: REGISTRY/mirante:0.1.0               ### ajuste
+          args:
+            - --front=ce-k8s-mcp=http://localhost:8080   ### porta do container do MCP
+            - --front-addr=:8081
+            - --events-url=http://mirante.observabilidade:8080
+            - --addr=:8090
+          ports: [{name: mirante, containerPort: 8081}]
+          readinessProbe:
+            httpGet: {path: /_mirante/healthz, port: mirante}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ce-k8s-mcp
+  namespace: ce
+spec:
+  selector: {app: ce-k8s-mcp}
+  ports: [{name: http, port: 80, targetPort: mirante}]   ### era targetPort: http
+# Rollback: targetPort de volta para "http" (o sidecar pode até continuar no pod).

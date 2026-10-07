@@ -83,6 +83,8 @@ Os upstreams ficam no ConfigMap, em `MIRANTE_LLM` e `MIRANTE_MCP`. Para adiciona
 | `--ingest-token` | `MIRANTE_INGEST_TOKEN` | aberto | bearer exigido em `POST /v1/events` |
 | `--events-url` | `MIRANTE_EVENTS_URL` | — | modo sidecar: manda eventos para o central em vez de servir o painel |
 | `--public-url` | `MIRANTE_PUBLIC_URL` | deduzida da requisição | URL que os agentes usam para chegar ao mirante; vai nas instruções para IA em `/ia` |
+| `--front server=url` | `MIRANTE_FRONT` | — | **modo front**: o mirante escuta no lugar do MCP (mesma URL e caminho), sem nada mudar nos clientes. A URL é só `esquema://host:porta` (seção 6.1) |
+| `--front-addr` | `MIRANTE_FRONT_ADDR` | `:8081` | porta do modo front (o Service/Ingress do MCP aponta para ela) |
 | `--min-confidence` | — | `0.6` | abaixo disso, a chamada fica marcada como incerteza |
 | `--max-runs` | — | `500` | quantos runs ficam em memória |
 
@@ -190,9 +192,46 @@ Validação manual com um agente real:
 
 ## 6. Mirante na frente de um MCP que já roda no Kubernetes
 
-O cenário: um MCP server (ex: o hub-server do k8s-ts-mcp ou o ce-k8s-mcp) já roda 100% no cluster, e você quer o mirante na frente dele. O mirante é **outro Deployment** (o central, seção 3.2). **O MCP não muda nada**: nem imagem, nem réplicas, nem código. Você só cria um Service a mais e troca a URL dos clientes.
+O cenário: um MCP server (ex: o hub-server do k8s-ts-mcp ou o ce-k8s-mcp) já roda 100% no cluster, e você quer os dados e as métricas dele no painel. Há dois casos:
 
-### Por que precisa de um Service headless
+- **Você não tem agente próprio**, e o MCP é usado por clientes que você não controla (Claude Code, Kiro, outros times): use o **modo front** (6.1). **Os clientes não mudam nada.**
+- **Os clientes são seus** e podem trocar a URL: basta o proxy com o nome do agente na URL (6.2 em diante).
+
+### 6.1 Sem agente próprio: modo front (clientes não mudam nada)
+
+No modo front (`--front server=URL`), o mirante **se passa pelo MCP**: escuta na mesma URL e no mesmo caminho que os clientes já usam, repassa tudo sem alterar, e manda os dados para o painel central. O Ingress ou Service que hoje aponta para o MCP passa a apontar para o mirante.
+
+O nome de cada cliente no mapa vem do próprio protocolo MCP: todo cliente se identifica no `initialize` (`clientInfo.name`: `claude-code`, `Kiro`…). O mirante lembra esse nome pela sessão. Quem quiser se identificar melhor manda o header `X-Mirante-Agent: <nome>`. Rotas que não são MCP (ex: o `/healthz` do próprio MCP) passam direto. A saúde do mirante fica em `/_mirante/healthz`.
+
+Duas formas de implantar. Os dois manifests foram validados num cluster kind:
+
+| | **A: Deployment na frente** ([`opcao-a-deployment.yaml`](../deploy/k8s/mcp-front/opcao-a-deployment.yaml)) | **B: sidecar no pod do MCP** ([`opcao-b-sidecar.yaml`](../deploy/k8s/mcp-front/opcao-b-sidecar.yaml)) |
+|---|---|---|
+| mexe no MCP? | **não**: só o backend do Ingress/Service muda | sim: um container a mais no Deployment e o `targetPort` do Service |
+| salto de rede | +1 (cliente → mirante → pod do MCP) | nenhum (localhost) |
+| ponto único de falha | sim, 1 réplica (o vínculo sessão→pod fica em memória) | não, escala junto com o MCP |
+| corrige `session not found` com várias réplicas | **sim** (afinidade via headless, 6.2) | não: a sessão fica como é hoje |
+| rollback | voltar o backend do Ingress | voltar o `targetPort` |
+
+**Quanto o mirante acrescenta na latência.** Medido de dentro de um cluster kind (1 nó), com o cliente MCP oficial do go-sdk e uma sessão longa: 2.000 chamadas por caminho, 3 rodadas, contra uma tool que **responde na hora**. Com isso, todo o custo extra é do mirante:
+
+| caminho | p50 | p99 | extra |
+|---|---|---|---|
+| direto no MCP | 0,36 ms | 0,84 ms | — |
+| A: Deployment front | 0,79 ms | 1,32 ms | **+0,43 ms** p50 / +0,5 ms p99 |
+| B: sidecar | 0,77 ms | 1,29 ms | **+0,41 ms** p50 / +0,5 ms p99 |
+
+Como ler esses números:
+
+- O custo é quase todo **o salto HTTP a mais** (mais uma ida e volta pelo kernel, mesmo em localhost), e não a observação em si. O profile de CPU mostra o mirante com cerca de 11% da CPU do processo. É a mesma ordem de grandeza de um sidecar de service mesh (Envoy).
+- Para uma tool real que leva 50 ms (uma chamada à API do Kubernetes), +0,4 ms é menos de 1%. Para uma `troubleshoot` de segundos, é ruído.
+- Num cluster com vários nós, o modo **A** soma a latência de rede entre nós/AZs, tipicamente 0,1 a 1 ms. O **B** não, porque fala por localhost.
+- Nada do painel fica no caminho da requisição. O evento entra numa fila e é aplicado depois. Se o painel atrasar ou cair, eventos são descartados (com aviso no log) e o MCP não espera.
+- Sob saturação artificial (32 sessões numa só máquina, contra uma tool que não faz nada), a vazão máxima do conjunto cai pela metade, porque o mirante divide a CPU com o MCP. É um cenário de pior caso, longe de tráfego real. Dê ao container do mirante sua própria reserva de CPU (`requests`).
+
+**Como escolher:** se o MCP tem várias réplicas e sofre de `session not found` (diagnóstico no passo 1 da 6.3), vá de **A**, que resolve isso de brinde. Se o MCP já funciona bem e você não quer nem um salto a mais nem um ponto único, vá de **B**.
+
+### 6.2 Por que precisa de um Service headless
 
 MCP Streamable HTTP feito com o go-sdk (opções padrão) guarda a sessão (`Mcp-Session-Id`) **na memória da réplica que fez o `initialize`**. Com várias réplicas atrás de um Service comum, o kube-proxy espalha as conexões (e o cliente MCP abre mais de uma), então parte das requisições cai na réplica errada e falha com `session not found`.
 
@@ -207,7 +246,7 @@ Medido num cluster kind com um MCP stateful de 2 réplicas, usando o cliente ofi
 
 > **Cookie de sticky session no ALB não resolve para clientes Go:** o cliente MCP do go-sdk usa `http.DefaultClient`, que não guarda cookies. Então a afinidade por cookie no Ingress não vale para wb-ce-agent, ce CLI e outros clientes Go. A afinidade no mirante não depende do cliente.
 
-### Passo a passo
+### 6.3 Passo a passo (headless + afinidade)
 
 **1. (Opcional) Diagnostique o MCP atual.** A ferramenta `examples/mcp-sessoes` abre N sessões e conta as falhas. Ela precisa rodar **dentro do cluster** para passar pelo kube-proxy:
 
@@ -248,7 +287,7 @@ kubectl -n k8s-ts-mcp run diag --rm -it --restart=Never --image=<registry>/mcp-s
 
 O diagnóstico conversa com o mirante, e quem conversa com o MCP é o pod do mirante (que tem o label liberado), então ele pode rodar de qualquer namespace. No painel, **cada sessão MCP vira um run** ("sessão MCP XXXXXXXX"), fechado quando o cliente encerra a sessão. Sessões longas, como de um poller, viram um run novo a cada 200 chamadas.
 
-### Como a afinidade se comporta
+### 6.4 Como a afinidade se comporta
 
 - **Sessão nova:** vai para um pod aleatório (como o kube-proxy). Daí em diante, todas as requisições dela (POST, stream GET, DELETE) vão para o mesmo pod.
 - **Pod morre:** some do DNS headless em segundos (o mirante consulta de novo a cada 3 s). Se o pod recusar conexão antes disso, ele vai para uma **quarentena de 30 s**. Sessões que estavam nele recebem `session not found` e o cliente precisa reabrir a sessão, exatamente como acontece hoje quando um pod do MCP reinicia.

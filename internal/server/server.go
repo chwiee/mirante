@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chwiee/mirante/internal/event"
@@ -238,4 +239,29 @@ Arquivos:
 - %[1]s/ia/claude/SKILL.md — formato skill do Claude Code
 - %[1]s/ia/kiro/mirante.md — formato steering do Kiro
 `, b)
+}
+
+// AsyncIngest devolve um emissor que NÃO roda no caminho da requisição: o
+// evento entra numa fila e uma goroutine aplica (store + SSE) em ordem. Fila
+// cheia = evento descartado e contado — o MCP/LLM nunca espera o painel.
+// Medido: aplicar o evento dentro da requisição custava ~0,4 ms por chamada
+// e serializava as requisições concorrentes num lock global.
+func (s *Server) AsyncIngest(buffer int) (emit func(*event.Event), dropped func() uint64) {
+	ch := make(chan *event.Event, buffer)
+	var drops atomic.Uint64
+	go func() {
+		for e := range ch {
+			s.Ingest([]*event.Event{e})
+		}
+	}()
+	emit = func(e *event.Event) {
+		select {
+		case ch <- e:
+		default:
+			if drops.Add(1)%1000 == 1 && s.Log != nil {
+				s.Log.Warn("painel atrasado: eventos descartados (o tráfego do agente/MCP não foi afetado)", "total", drops.Load())
+			}
+		}
+	}
+	return emit, drops.Load
 }

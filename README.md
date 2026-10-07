@@ -39,6 +39,8 @@ O botão **"+ Conectar agente"** no painel gera essas URLs. O mirante repassa tu
 
 ➡️ **Validar uma implantação:** `./scripts/validar.sh http://<mirante>`
 
+➡️ **Só tem o MCP, sem agente próprio** (clientes que você não controla, como Claude Code ou Kiro): **modo front**, em que o mirante escuta no lugar do MCP e **os clientes não mudam nada**. Custo medido: +0,4 ms por chamada. Ver [guia, seção 6.1](docs/IMPLANTACAO.md#61-sem-agente-próprio-modo-front-clientes-não-mudam-nada).
+
 ➡️ **MCP que já roda no Kubernetes, com várias réplicas** (sessão MCP por pod): o mirante entra como outro Deployment, aponta para o Service headless e prende cada sessão ao pod certo. Ver [guia, seção 6](docs/IMPLANTACAO.md#6-mirante-na-frente-de-um-mcp-que-já-roda-no-kubernetes) e o diagnóstico `examples/mcp-sessoes`.
 
 ➡️ **Pedir para a IA integrar** (Claude Code, Kiro): o mirante serve a instrução pronta em `/ia`. Ver [guia, seção 4.4](docs/IMPLANTACAO.md#44-pedir-para-a-ia-fazer-claude-code-kiro).

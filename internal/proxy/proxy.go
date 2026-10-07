@@ -52,13 +52,23 @@ type Proxy struct {
 
 	affMu sync.Mutex
 	aff   map[string]*affinity // MCP server → afinidade de sessão
+
+	// transport compartilhado com pool dimensionado: o http.DefaultTransport
+	// guarda só 2 conexões ociosas por destino, e com clientes concorrentes o
+	// proxy abria uma conexão TCP nova a cada requisição (esgotou portas no
+	// benchmark com 32 sessões; no cluster, handshake extra por chamada).
+	transport *http.Transport
 }
 
 func New(cfg Config) *Proxy {
 	if cfg.Log == nil {
 		cfg.Log = slog.Default()
 	}
-	p := &Proxy{cfg: cfg, corr: newCorrelator(cfg.Emit, redactor(cfg.RedactKeys)), stop: make(chan struct{})}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConns = 1024
+	tr.MaxIdleConnsPerHost = 256
+	tr.IdleConnTimeout = 90 * time.Second
+	p := &Proxy{cfg: cfg, corr: newCorrelator(cfg.Emit, redactor(cfg.RedactKeys)), stop: make(chan struct{}), transport: tr}
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()
@@ -128,7 +138,7 @@ func (p *Proxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	dialect := detectDialect(rest)
 	if r.Method != http.MethodPost || dialect == "" {
-		p.forward(w, r, up, "", rest, nil, nil, nil) // /api/tags, /v1/models… passam direto
+		p.forward(w, r, p.transport, up, "", rest, nil, nil, nil) // /api/tags, /v1/models… passam direto
 		return
 	}
 
@@ -139,7 +149,7 @@ func (p *Proxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	req, raw, ok := parseChatReq(dialect, body)
 	if !ok {
-		p.forward(w, r, up, "", rest, body, nil, nil)
+		p.forward(w, r, p.transport, up, "", rest, body, nil, nil)
 		return
 	}
 
@@ -179,7 +189,7 @@ func (p *Proxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 		})
 		return nil
 	}
-	p.forward(w, r, up, "", rest, body, modify, func(err error) { p.corr.llmError(t, err.Error()) })
+	p.forward(w, r, p.transport, up, "", rest, body, modify, func(err error) { p.corr.llmError(t, err.Error()) })
 }
 
 // ---------- MCP ----------
@@ -202,6 +212,25 @@ func (p *Proxy) handleMCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("mirante: MCP server %q não configurado (use --mcp %s=URL)", server, server), http.StatusNotFound)
 		return
 	}
+	p.serveMCP(w, r, agent, server, up, rest, nil)
+}
+
+// serveMCP encaminha uma requisição MCP para o upstream observando no
+// caminho. after (opcional) vê cada resposta — o modo front usa para
+// aprender sessão → cliente.
+func (p *Proxy) serveMCP(w http.ResponseWriter, r *http.Request, agent, server, up, rest string, after func(*http.Response)) {
+	withAfter := func(next func(*http.Response) error) func(*http.Response) error {
+		if after == nil {
+			return next
+		}
+		return func(resp *http.Response) error {
+			after(resp)
+			if next != nil {
+				return next(resp)
+			}
+			return nil
+		}
+	}
 	// afinidade de sessão: com upstream headless (vários pods), cada sessão
 	// MCP fica presa ao pod que a criou — ver affinity.go
 	aff := p.affinityFor(server, up)
@@ -212,7 +241,7 @@ func (p *Proxy) handleMCP(w http.ResponseWriter, r *http.Request) {
 		p.corr.mcpSessionEnd(agent, sid) // cliente encerrou a sessão: fecha o run dela
 	}
 	if r.Method != http.MethodPost {
-		p.forward(w, r, target, aff.hostHeader(backend), rest, nil, aff.wrap(nil, r.Method, sid, backend), aff.onErr(backend, nil)) // GET (stream do servidor) e DELETE (fim de sessão)
+		p.forward(w, r, aff.roundTripper(p.transport, sid), target, aff.hostHeader(backend), rest, nil, aff.wrap(withAfter(nil), r.Method, sid, backend), aff.onErr(backend, nil)) // GET (stream do servidor) e DELETE (fim de sessão)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<20))
@@ -244,7 +273,7 @@ func (p *Proxy) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(calls) == 0 && len(lists) == 0 {
-		p.forward(w, r, target, aff.hostHeader(backend), rest, body, aff.wrap(nil, r.Method, sid, backend), aff.onErr(backend, nil))
+		p.forward(w, r, aff.roundTripper(p.transport, sid), target, aff.hostHeader(backend), rest, body, aff.wrap(withAfter(nil), r.Method, sid, backend), aff.onErr(backend, nil))
 		return
 	}
 
@@ -285,7 +314,7 @@ func (p *Proxy) handleMCP(w http.ResponseWriter, r *http.Request) {
 		})
 		return nil
 	}
-	p.forward(w, r, target, aff.hostHeader(backend), rest, body, aff.wrap(modify, r.Method, sid, backend), aff.onErr(backend, func(err error) { failAll(err.Error()) }))
+	p.forward(w, r, aff.roundTripper(p.transport, sid), target, aff.hostHeader(backend), rest, body, aff.wrap(withAfter(modify), r.Method, sid, backend), aff.onErr(backend, func(err error) { failAll(err.Error()) }))
 }
 
 // sanitizeCalls é a rede de segurança da injeção de raciocínio: se um campo
@@ -446,7 +475,7 @@ func toolSpecs(raw json.RawMessage) []event.ToolSpec {
 
 // host, se não vazio, vira o header Host enviado (afinidade: o destino é o
 // IP do pod, mas o Host continua o nome original — ALB/Ingress roteiam por ele).
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, upstream, host, rest string, body []byte,
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, rt http.RoundTripper, upstream, host, rest string, body []byte,
 	modify func(*http.Response) error, onErr func(error)) {
 	target, err := url.Parse(upstream)
 	if err != nil {
@@ -455,6 +484,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, upstream, host, 
 	}
 	observing := modify != nil
 	rp := &httputil.ReverseProxy{
+		Transport: rt,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.Out.URL.Path = joinPath(target.Path, rest)
@@ -479,6 +509,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, upstream, host, 
 	}
 	if body != nil {
 		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil } // retentativa segura
 		r.ContentLength = int64(len(body))
 		r.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	}

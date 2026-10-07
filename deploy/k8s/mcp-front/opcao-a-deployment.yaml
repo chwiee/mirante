@@ -1,0 +1,100 @@
+# OPÇÃO A — mirante como Deployment na frente de um MCP que já roda no cluster.
+#
+# Para quem NÃO tem agente próprio: o MCP é usado por clientes que você não
+# controla (Claude Code, Kiro, outros times). Nada muda para eles nem para o
+# MCP (imagem, réplicas, código): o Service/Ingress que hoje aponta para o MCP
+# passa a apontar para o mirante, que repassa tudo igual e manda os dados para
+# o painel central. O nome de cada cliente vem do próprio protocolo MCP
+# (clientInfo.name do initialize: "claude-code", "Kiro"…).
+#
+# Ganha de brinde: afinidade de sessão MCP (via Service headless), que corrige
+# o "session not found" intermitente de MCP stateful com várias réplicas.
+# Custo: +1 salto de rede por chamada (medido: ver docs/IMPLANTACAO.md, seção 6).
+#
+# Ajuste os pontos marcados com  ### (exemplo pronto: ce-k8s-mcp, namespace ce,
+# porta 8080, MCP em /mcp). Pré-requisito: o mirante central no ar
+# (deploy/k8s/mirante.yaml), que recebe os eventos e serve o painel.
+---
+# 1) Service headless do MCP: o DNS devolve o IP de cada pod (afinidade).
+apiVersion: v1
+kind: Service
+metadata:
+  name: ce-k8s-mcp-headless                 ### <mcp>-headless
+  namespace: ce                             ### namespace do MCP
+spec:
+  clusterIP: None
+  selector: {app: ce-k8s-mcp}               ### mesmo selector do Service atual do MCP
+  ports:
+    - {name: http, port: 8080, targetPort: http}   ### porta do CONTAINER do MCP
+---
+# 2) O mirante "front": escuta no lugar do MCP e repassa para o headless.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mirante-front
+  namespace: ce                             ### namespace do MCP (o Ingress/Service atual vive aqui)
+  labels: {app: mirante-front}
+spec:
+  replicas: 1          # o vínculo sessão→pod fica em memória; ver "SPOF" no guia
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: mirante-front}}
+  template:
+    metadata:
+      labels: {app: mirante-front}
+    spec:
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: mirante
+          image: REGISTRY/mirante:0.1.0     ### ajuste
+          args:
+            # server=URL: o nome aparece no mapa; a URL é SÓ esquema://host:porta
+            # (o caminho que o cliente usa, ex: /mcp, é preservado)
+            - --front=ce-k8s-mcp=http://ce-k8s-mcp-headless.ce.svc.cluster.local:8080   ###
+            - --front-addr=:8081
+            - --events-url=http://mirante.observabilidade:8080   # painel central
+            - --addr=:8090                                       # porta interna (saúde)
+          ports:
+            - {name: front, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /_mirante/healthz, port: front}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /_mirante/healthz, port: front}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+---
+# 3) Service do mirante-front. Para os clientes não mudarem NADA, troque o
+#    backend do Ingress atual (ou o selector do Service atual) para cá.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mirante-front
+  namespace: ce                             ###
+spec:
+  selector: {app: mirante-front}
+  ports:
+    - {name: http, port: 80, targetPort: front}   ### mesma porta que o Service atual do MCP expõe
+# ---
+# 4) SÓ SE o MCP já tiver NetworkPolicy (ex: hub-server do k8s-ts-mcp): libere
+#    o mirante-front. NÃO crie isto num MCP sem NetworkPolicy — a existência de
+#    uma policy isola os pods e bloquearia todo o resto.
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata: {name: mcp-from-mirante-front, namespace: k8s-ts-mcp}
+# spec:
+#   podSelector: {matchLabels: {app: hub-server}}
+#   policyTypes: [Ingress]
+#   ingress:
+#     - from: [{podSelector: {matchLabels: {app: mirante-front}}}]
+#       ports: [{protocol: TCP, port: 8443}]
+#
+# Ingress (exemplo): só o backend muda.
+#   - backend: {service: {name: ce-k8s-mcp, port: {number: 80}}}
+#   + backend: {service: {name: mirante-front, port: {number: 80}}}
+# Rollback: voltar o backend. O MCP nunca foi tocado.

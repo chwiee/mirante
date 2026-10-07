@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -28,17 +29,18 @@ import (
 // então upstream com 1 IP só (Service ClusterIP, host externo) segue igual.
 // Upstream https = desligado (o certificado não valeria para o IP do pod).
 type affinity struct {
-	mu       sync.Mutex
-	scheme   string
-	host     string // como no upstream (DNS)
-	port     string
-	backends []string // ip:porta atuais
-	at       time.Time
-	sessions map[string]string    // Mcp-Session-Id → ip:porta
-	bad      map[string]time.Time // pods que recusaram conexão (quarentena)
-	ttl      time.Duration
-	lookup   func(ctx context.Context, host string) ([]string, error)
-	disabled bool
+	mu         sync.Mutex
+	scheme     string
+	host       string // como no upstream (DNS)
+	port       string
+	backends   []string // ip:porta atuais
+	at         time.Time
+	sessions   map[string]string    // Mcp-Session-Id → ip:porta
+	bad        map[string]time.Time // pods que recusaram conexão (quarentena)
+	refreshing bool                 // consulta DNS em andamento (em segundo plano)
+	ttl        time.Duration
+	lookup     func(ctx context.Context, host string) ([]string, error)
+	disabled   bool
 }
 
 const (
@@ -49,8 +51,8 @@ const (
 func newAffinity(upstream string) *affinity {
 	a := &affinity{sessions: map[string]string{}, bad: map[string]time.Time{}, ttl: 3 * time.Second, lookup: net.DefaultResolver.LookupHost}
 	u, err := url.Parse(upstream)
-	if err != nil || u.Scheme != "http" || net.ParseIP(u.Hostname()) != nil {
-		a.disabled = true // https, IP literal ou URL inválida: não há o que fixar
+	if err != nil || u.Scheme != "http" || net.ParseIP(u.Hostname()) != nil || u.Hostname() == "localhost" {
+		a.disabled = true // https, IP literal, localhost (sidecar) ou URL inválida: não há o que fixar
 		return a
 	}
 	a.scheme, a.host, a.port = u.Scheme, u.Hostname(), u.Port()
@@ -61,13 +63,32 @@ func newAffinity(upstream string) *affinity {
 }
 
 // refresh atualiza a lista de pods (no máximo a cada ttl). Chamado com mu.
+//
+// A consulta DNS acontece FORA do lock e, depois da primeira, em segundo
+// plano: nenhuma requisição espera DNS (nem fica presa atrás de outra que
+// está esperando). Só a primeira requisição, sem lista nenhuma, espera.
 func (a *affinity) refresh() {
-	if time.Since(a.at) < a.ttl && len(a.backends) > 0 {
+	if len(a.backends) == 0 {
+		a.mu.Unlock()
+		a.resolve()
+		a.mu.Lock()
 		return
 	}
+	if time.Since(a.at) >= a.ttl && !a.refreshing {
+		a.refreshing = true
+		go a.resolve()
+	}
+}
+
+// resolve consulta o DNS e aplica a lista nova. Não pode ser chamado com mu.
+func (a *affinity) resolve() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	ips, err := a.lookup(ctx, a.host)
+	cancel()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refreshing = false
 	for b, t := range a.bad {
 		if time.Since(t) >= quarantine {
 			delete(a.bad, b) // quarentena vencida: o IP pode voltar (ou nunca mais aparecer)
@@ -160,7 +181,11 @@ func (a *affinity) wrap(next func(*http.Response) error, method, sessionID, back
 			a.forget(sessionID)
 		default:
 			if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
-				a.bind(sid, backend)
+				served := backend
+				if backend != "" && resp.Request != nil {
+					served = resp.Request.URL.Host // o pod que de fato atendeu (pode ser outro após retentativa)
+				}
+				a.bind(sid, served)
 			}
 		}
 		if next != nil {
@@ -231,4 +256,43 @@ func (a *affinity) onErr(backend string, next func(error)) func(error) {
 			next(err)
 		}
 	}
+}
+
+// roundTripper: se o pod escolhido recusar a CONEXÃO (morreu e o DNS ainda
+// não refletiu), a requisição nunca chegou ao MCP — então é seguro tentar
+// outro pod. Só para requisições sem sessão (initialize): uma sessão presa
+// ao pod morto morreu com ele, e reenviar para outro pod daria 404 de
+// qualquer jeito.
+func (a *affinity) roundTripper(base http.RoundTripper, sessionID string) http.RoundTripper {
+	if a.disabled || sessionID != "" {
+		return base
+	}
+	return rtFunc(func(req *http.Request) (*http.Response, error) {
+		resp, err := base.RoundTrip(req)
+		for tries := 0; err != nil && isDialErr(err) && tries < 2; tries++ {
+			a.failed(req.URL.Host)
+			next := a.pick("")
+			if next == "" || next == req.URL.Host || req.GetBody == nil && req.Body != nil && req.Body != http.NoBody {
+				break
+			}
+			r2 := req.Clone(req.Context())
+			r2.URL.Host = next
+			if req.GetBody != nil {
+				if r2.Body, err = req.GetBody(); err != nil {
+					break
+				}
+			}
+			resp, err = base.RoundTrip(r2)
+		}
+		return resp, err
+	})
+}
+
+type rtFunc func(*http.Request) (*http.Response, error)
+
+func (f rtFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func isDialErr(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
 }

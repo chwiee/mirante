@@ -12,7 +12,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -79,6 +78,8 @@ func main() {
 	redact := flag.String("redact-keys", envOr("MIRANTE_REDACT_KEYS", proxy.DefaultRedactKeys.String()), "regex de chaves JSON redigidas no proxy (vazio desliga)")
 	eventsURL := flag.String("events-url", os.Getenv("MIRANTE_EVENTS_URL"), "modo sidecar: manda eventos do proxy para este mirante central")
 	publicURL := flag.String("public-url", os.Getenv("MIRANTE_PUBLIC_URL"), "URL pela qual os agentes alcançam este mirante (vai nas instruções para IA em /ia; vazio = deduz da requisição)")
+	front := flag.String("front", os.Getenv("MIRANTE_FRONT"), "modo front: o mirante se passa pelo MCP server, na mesma URL que os clientes já usam (server=URL; ex: k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc:8443). Clientes não mudam nada; o nome do cliente vem do initialize")
+	frontAddr := flag.String("front-addr", envOr("MIRANTE_FRONT_ADDR", ":8081"), "porta do modo front (o Service/Ingress do MCP aponta para ela)")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -104,10 +105,9 @@ func main() {
 	if *eventsURL != "" {
 		// sidecar: eventos vão em lote para o central; agente nunca espera o painel
 		mc := mirante.New(mirante.Config{URL: strings.TrimRight(*eventsURL, "/"), Token: *token})
-		emit = func(e *event.Event) {
-			b, _ := json.Marshal(e)
-			mc.Send(json.RawMessage(b))
-		}
+		// o evento vai como está: o SDK serializa uma vez, em lote, fora da
+		// requisição (antes: json.Marshal aqui, no caminho, e de novo no lote)
+		emit = func(e *event.Event) { mc.Send(e) }
 		closeFn = mc.Close
 	} else {
 		srv = &server.Server{
@@ -118,7 +118,7 @@ func main() {
 			UI:          web.FS,
 			Log:         log,
 		}
-		emit = func(e *event.Event) { srv.Ingest([]*event.Event{e}) }
+		emit, _ = srv.AsyncIngest(16384) // fora do caminho da requisição
 	}
 
 	px := proxy.New(proxy.Config{LLM: llm, MCP: mcp, InjectReasoning: *inject, RedactKeys: redactRe, Emit: emit, Log: log})
@@ -162,10 +162,40 @@ func main() {
 		go demo.Run(ctx, base)
 	}
 
+	// modo front: listener próprio, no lugar do MCP (a raiz "/" aqui é do MCP,
+	// não do painel). Saúde do próprio mirante em /_mirante/healthz.
+	var fs *http.Server
+	if *front != "" {
+		name, up, ok := strings.Cut(*front, "=")
+		if !ok || name == "" || up == "" {
+			log.Error("config", "err", "--front espera server=URL", "valor", *front)
+			os.Exit(2)
+		}
+		fmux := http.NewServeMux()
+		fmux.HandleFunc("GET /_mirante/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+		fmux.Handle("/", px.Front(name, up))
+		fln, err := net.Listen("tcp", *frontAddr)
+		if err != nil {
+			log.Error("listen front", "err", err)
+			os.Exit(1)
+		}
+		fs = &http.Server{Handler: fmux, ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := fs.Serve(fln); err != nil && err != http.ErrServerClosed {
+				log.Error("serve front", "err", err)
+				stop()
+			}
+		}()
+		log.Info("modo front no ar: clientes do MCP entram por aqui", "server", name, "upstream", up, "addr", fln.Addr().String())
+	}
+
 	<-ctx.Done()
 	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	hs.Shutdown(shut)
+	if fs != nil {
+		fs.Shutdown(shut)
+	}
 	closeFn()
 }
 

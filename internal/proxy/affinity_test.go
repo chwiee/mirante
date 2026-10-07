@@ -206,8 +206,8 @@ func TestAfinidadeQuarentenaDePodMorto(t *testing.T) {
 	r.px.affinityFor("eco", "http://eco-headless.ns.svc:8080").ttl = 0
 	a.Close()
 	f, reps := rodarSessoesR(t, r.url+"/p/agente/mcp/eco", 20)
-	if f > 1 {
-		t.Fatalf("%d sessões falharam com o pod morto ainda no DNS (máximo aceitável: 1)", f)
+	if f != 0 {
+		t.Fatalf("%d sessões falharam com o pod morto ainda no DNS (a retentativa de conexão deveria cobrir)", f)
 	}
 	if reps["A"] != 0 || reps["B"] < 19 {
 		t.Fatalf("distribuição: %v", reps)
