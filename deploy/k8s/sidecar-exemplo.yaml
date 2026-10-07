@@ -1,0 +1,51 @@
+# Exemplo: wb-ce-agent com o mirante como SIDECAR.
+#
+# O sidecar só faz proxy (sem UI) e manda os eventos, em lote e de forma
+# assíncrona, para o mirante central. Se o central cair, o sidecar descarta
+# eventos e o agente segue funcionando — o painel nunca vira ponto único de
+# falha do agente.
+#
+# Diferença para o agente: só as URLs, apontando para localhost:8081.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wb-ce-agent
+  namespace: ce
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: wb-ce-agent }
+  template:
+    metadata:
+      labels: { app: wb-ce-agent }
+    spec:
+      containers:
+        - name: wb-ce-agent
+          image: REGISTRY/wb-ce-agent:latest   # sem nenhuma mudança de código
+          env:
+            # antes: http://ollama.ce.svc:11434
+            - { name: OLLAMA_URL, value: "http://localhost:8081/p/wb-ce-agent/llm/ollama" }
+            # antes: k8s-ts-mcp=http://k8s-ts-mcp.k8s-ts.svc:8443
+            - { name: MCP_SERVERS, value: "k8s-ts-mcp=http://localhost:8081/p/wb-ce-agent/mcp/k8s-ts-mcp" }
+
+        - name: mirante
+          image: REGISTRY/mirante:0.1.0
+          args:
+            - --addr=:8081
+            - --events-url=http://mirante.observabilidade:8080
+            - --llm=ollama=http://ollama.ce.svc:11434
+            - --mcp=k8s-ts-mcp=http://k8s-ts-mcp.k8s-ts.svc:8443
+            - --inject-reasoning
+          ports:
+            - { name: proxy, containerPort: 8081 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: proxy }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

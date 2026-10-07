@@ -1,0 +1,85 @@
+# mirante central: painel (telão) + proxy plug-and-play.
+#
+# Antes de aplicar:
+#   1. publique a imagem:  docker build -t <registry>/mirante:0.1.0 . && docker push <registry>/mirante:0.1.0
+#   2. ajuste "image" abaixo e os upstreams no ConfigMap
+#   3. kubectl apply -f deploy/k8s/mirante.yaml
+#
+# replicas: 1 de propósito — o estado do painel é em memória, por processo.
+# Para o agente não depender deste pod, use o modo sidecar (sidecar-exemplo.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observabilidade
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mirante
+  namespace: observabilidade
+data:
+  # nome=url, separados por vírgula. O nome é o que vai na URL do agente:
+  #   http://mirante.observabilidade:8080/p/<agente>/llm/<nome>
+  #   http://mirante.observabilidade:8080/p/<agente>/mcp/<nome>
+  MIRANTE_LLM: "ollama=http://ollama.ce.svc:11434"
+  MIRANTE_MCP: "k8s-ts-mcp=http://k8s-ts-mcp.k8s-ts.svc:8443,knowledge-mcp=http://knowledge-mcp.ce.svc:8444,ce-k8s-mcp=http://ce-k8s-mcp.ce.svc:8080/mcp"
+  MIRANTE_INJECT_REASONING: "true"
+  # tools que executam ações mesmo sem o nome dizer (evita falso "acao_nao_executada")
+  MIRANTE_ACTION_TOOLS: "troubleshoot,approve_action,run_automation"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mirante
+  namespace: observabilidade
+  labels: { app: mirante }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: mirante }
+  template:
+    metadata:
+      labels: { app: mirante }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mirante
+          image: REGISTRY/mirante:0.1.0   # ajuste
+          args: ["--addr", ":8080"]
+          envFrom:
+            - configMapRef: { name: mirante }
+          env:
+            - name: MIRANTE_INGEST_TOKEN   # opcional: exige bearer em POST /v1/events
+              valueFrom:
+                secretKeyRef: { name: mirante, key: ingest-token, optional: true }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mirante
+  namespace: observabilidade
+spec:
+  selector: { app: mirante }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+# Telão: exponha via Ingress interno (com SSO, se houver). Se o Ingress
+# bufferizar respostas, o stream SSE (/api/stream) trava — use timeout de
+# leitura >= 60s; o mirante já envia "X-Accel-Buffering: no".
