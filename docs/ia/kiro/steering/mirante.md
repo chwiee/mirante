@@ -93,6 +93,7 @@ Para MCP, com o upstream `k8s-ts-mcp → http://hub:8443/mcp`: a URL atual `http
 - **Proxy só de MCP**, sem o do LLM: o painel mostra as tools, mas cada rajada de chamadas vira um run sem pergunta e sem decisão. É o esperado.
 - **Proxy só de LLM**, sem o do MCP: as tools aparecem sem o MCP server ao lado no mapa. Aponte os dois quando puder.
 - O agente **não precisa de nenhuma dependência nova** no modo A.
+- **MCP com várias réplicas** (ex: `replicas: 2+` no Deployment do MCP): sessões MCP do go-sdk vivem na memória de cada réplica. O upstream no mirante deve apontar para um **Service headless** do MCP, para o mirante prender cada sessão a um pod. Se o upstream configurado for o Service comum, avise o usuário e aponte o guia de implantação, seção 6 ("Mirante na frente de um MCP que já roda no Kubernetes"). Não é algo que se resolve no agente.
 
 ## Passo 3B — Modo SDK (só Go)
 

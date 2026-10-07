@@ -22,7 +22,9 @@ data:
   #   http://mirante.observabilidade:8080/p/<agente>/llm/<nome>
   #   http://mirante.observabilidade:8080/p/<agente>/mcp/<nome>
   MIRANTE_LLM: "ollama=http://ollama.ce.svc:11434"
-  MIRANTE_MCP: "k8s-ts-mcp=http://k8s-ts-mcp.k8s-ts.svc:8443,knowledge-mcp=http://knowledge-mcp.ce.svc:8444,ce-k8s-mcp=http://ce-k8s-mcp.ce.svc:8080/mcp"
+  # MCPs com várias réplicas: aponte para o Service HEADLESS (afinidade de
+  # sessão MCP) — ver deploy/k8s/mirante-na-frente-do-mcp.yaml.
+  MIRANTE_MCP: "k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc.cluster.local:8443,ce-k8s-mcp=http://ce-k8s-mcp-headless.ce.svc.cluster.local:8080/mcp,knowledge-mcp=http://knowledge-mcp.ce.svc:8444"
   MIRANTE_INJECT_REASONING: "true"
   # tools que executam ações mesmo sem o nome dizer (evita falso "acao_nao_executada")
   MIRANTE_ACTION_TOOLS: "troubleshoot,approve_action,run_automation"

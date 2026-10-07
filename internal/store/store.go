@@ -100,7 +100,10 @@ func (s *Store) Apply(e *event.Event) Update {
 		s.addStep(run, st)
 		st.Flags = s.det.ToolCall(run, st)
 		if k := (topoKey{run.Agent, e.Server, e.Tool}); !s.topo[k] {
-			s.topo[k] = false // chamada a tool não declarada: nó "fantasma" no mapa
+			// "fantasma" só quando havia uma lista de tools oferecidas e esta não
+			// estava nela. Sem lista (cliente MCP que não chamou tools/list, SDK
+			// sem tools no run_start) não dá para afirmar que é inventada.
+			s.topo[k] = !offered(run.Tools) || declaredIn(run.Tools, e.Server, e.Tool)
 		}
 
 	case event.ToolResult:
@@ -273,4 +276,15 @@ func (s *Store) Topology() []TopoEdge {
 		out = append(out, TopoEdge{k.Agent, k.Server, k.Tool, d})
 	}
 	return out
+}
+
+func offered(tools []event.ToolSpec) bool { return len(tools) > 0 }
+
+func declaredIn(tools []event.ToolSpec, server, name string) bool {
+	for _, t := range tools {
+		if t.Name == name && (server == "" || t.Server == "" || t.Server == server) {
+			return true
+		}
+	}
+	return false
 }

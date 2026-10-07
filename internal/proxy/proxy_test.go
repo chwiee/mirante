@@ -228,15 +228,14 @@ func TestSoMCPViraRunSintetico(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cs.Close()
+	// (fechada abaixo, de propósito)
 	cs.ListTools(ctx, nil)
 	for _, c := range []string{"eks-a", "eks-b"} {
 		if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "scan_cluster", Arguments: map[string]any{"cluster_id": c}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	time.Sleep(80 * time.Millisecond)
-	r.px.corr.sweep()
+	cs.Close() // DELETE da sessão: o mirante fecha o run dela
 
 	run := r.waitRun(t, func(r *event.Run) bool { return r.Agent == "alfred" && r.Status == "ok" })
 	if len(run.Steps) != 2 || run.Steps[0].Server != "k8s-ts-mcp" || run.Steps[1].Status != "ok" {
@@ -384,4 +383,49 @@ func TestUpstreamsExpoeURLSemCredencial(t *testing.T) {
 	if got := up["mcp_urls"].(map[string]string)["k8s"]; got != "https://hub:8443/mcp" {
 		t.Fatalf("credencial vazou ou URL errada: %q", got)
 	}
+}
+
+// Visto no laboratório kind: 300 sessões viravam 1 run com 1.495 passos.
+// Agora: um run por sessão MCP, e cliente que não chamou tools/list não gera
+// "tool inexistente" (nó fantasma) para uma tool real.
+func TestSoMCPUmRunPorSessaoSemFantasma(t *testing.T) {
+	mcpTS, _ := mcpServer(t, 0)
+	r := newRig(t, Config{MCP: map[string]string{"k8s-ts-mcp": mcpTS.URL}})
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		cs, err := mcp.NewClient(&mcp.Implementation{Name: "poller", Version: "0"}, nil).
+			Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/poller/mcp/k8s-ts-mcp"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// sem ListTools de propósito
+		if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "scan_cluster", Arguments: map[string]any{"cluster_id": "a"}}); err != nil {
+			t.Fatal(err)
+		}
+		cs.Close()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, _ := r.srv.Store.Runs()
+		done := 0
+		for _, run := range runs {
+			if run.Agent == "poller" && run.Status == "ok" {
+				done++
+				if run.Worst() != "" {
+					t.Fatalf("tool real virou alerta: %+v %+v", run.Flags, run.Steps[0].Flags)
+				}
+			}
+		}
+		if done == 3 {
+			for _, e := range r.srv.Store.Topology() {
+				if e.Agent == "poller" && !e.Declared {
+					t.Fatalf("tool real marcada como fantasma no mapa: %+v", e)
+				}
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	runs, _ := r.srv.Store.Runs()
+	t.Fatalf("esperava 3 runs fechados (1 por sessão), veio %d runs", len(runs))
 }

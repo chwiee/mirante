@@ -375,7 +375,10 @@
     if (e.type === 'run_start') for (const tl of e.tools || []) topoChanged = addTopo(run.agent, tl.server, tl.name, true) || topoChanged;
     if (e.type === 'tool_call' || e.type === 'tool_result') {
       const k = run.agent + '|' + srv(e.server) + '|' + e.tool;
-      if (!state.topo.has(k)) topoChanged = addTopo(run.agent, e.server, e.tool, false) || topoChanged;
+      // fantasma só se o servidor disse que a tool não estava entre as oferecidas
+      const st = (run.steps || []).find((s) => s.span_id === e.span_id);
+      const ghost = (st?.flags || []).some((f) => f.code === 'tool_inexistente');
+      if (!state.topo.has(k)) topoChanged = addTopo(run.agent, e.server, e.tool, !ghost) || topoChanged;
     }
     if (!nodes.has(nid.a(run.agent))) topoChanged = true;
     const sig = [...state.topo.keys()].sort().join(',') + '#' + [...new Set([...state.runs.values()].map((r) => r.agent))].sort().join(',');

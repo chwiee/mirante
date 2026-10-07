@@ -39,6 +39,8 @@ O botão **"+ Conectar agente"** no painel gera essas URLs. O mirante repassa tu
 
 ➡️ **Validar uma implantação:** `./scripts/validar.sh http://<mirante>`
 
+➡️ **MCP que já roda no Kubernetes, com várias réplicas** (sessão MCP por pod): o mirante entra como outro Deployment, aponta para o Service headless e prende cada sessão ao pod certo. Ver [guia, seção 6](docs/IMPLANTACAO.md#6-mirante-na-frente-de-um-mcp-que-já-roda-no-kubernetes) e o diagnóstico `examples/mcp-sessoes`.
+
 ➡️ **Pedir para a IA integrar** (Claude Code, Kiro): o mirante serve a instrução pronta em `/ia`. Ver [guia, seção 4.4](docs/IMPLANTACAO.md#44-pedir-para-a-ia-fazer-claude-code-kiro).
 
 ➡️ **Agente de exemplo que não importa nada do mirante:** [`examples/agente-minimo`](examples/agente-minimo/main.go)
@@ -53,7 +55,7 @@ O botão **"+ Conectar agente"** no painel gera essas URLs. O mirante repassa tu
 | `acao_nao_executada` | 🔴 | o modelo afirma que fez algo ("registrei", "reiniciei") sem nenhuma tool capaz disso ter rodado |
 | `baixa_confianca` · `escolha_ambigua` · `chamada_repetida` · `resposta_apos_erro` | 🟡 | sinais de escolha duvidosa |
 
-Os detalhes e o ajuste fino (`--action-tools`, anotações MCP) estão na [seção 8 do guia](docs/IMPLANTACAO.md#8-detecção-de-alucinação).
+Os detalhes e o ajuste fino (`--action-tools`, anotações MCP) estão na [seção 9 do guia](docs/IMPLANTACAO.md#9-detecção-de-alucinação).
 
 ## Modo SDK (Go)
 
@@ -104,4 +106,4 @@ Validado ao vivo com `qwen2.5:7b` (Ollama) + `knowledge-mcp` real. Esse teste re
 
 ## Limites da v1
 
-Estado em memória com 1 réplica. Heurística não pega afirmação falsa em texto corrido (use LLM-judge + `Flag`). LLM com requisição assinada (Bedrock) não passa pelo proxy: use proxy só de MCP ou o SDK. A lista completa está no [guia](docs/IMPLANTACAO.md#12-limitações-conhecidas-v1).
+Estado em memória com 1 réplica. Heurística não pega afirmação falsa em texto corrido (use LLM-judge + `Flag`). LLM com requisição assinada (Bedrock) não passa pelo proxy: use proxy só de MCP ou o SDK. A lista completa está no [guia](docs/IMPLANTACAO.md#13-limitações-conhecidas-v1).

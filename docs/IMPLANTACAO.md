@@ -68,7 +68,7 @@ kubectl -n observabilidade port-forward svc/mirante 8080:8080   # ou exponha via
 
 Os upstreams ficam no ConfigMap, em `MIRANTE_LLM` e `MIRANTE_MCP`. Para adicionar um MCP server novo, edite o ConfigMap e reinicie o pod. Os agentes não mudam.
 
-**Importante:** `replicas: 1`. O store e o stream do painel ficam em memória, por processo. Para não virar ponto único de falha do agente, use o modo sidecar (seção 6).
+**Importante:** `replicas: 1`. O store e o stream do painel ficam em memória, por processo. Para não virar ponto único de falha do agente, use o modo sidecar (seção 7).
 
 ### 3.3 Flags e variáveis
 
@@ -77,8 +77,8 @@ Os upstreams ficam no ConfigMap, em `MIRANTE_LLM` e `MIRANTE_MCP`. Para adiciona
 | `--addr` | `MIRANTE_ADDR` | `:8080` | porta HTTP |
 | `--llm nome=url` | `MIRANTE_LLM` (`a=url,b=url`) | — | upstreams de LLM do proxy (repetível) |
 | `--mcp server=url` | `MIRANTE_MCP` | — | upstreams MCP do proxy (repetível) |
-| `--inject-reasoning` | `MIRANTE_INJECT_REASONING=true` | desligado | pede ao modelo o **porquê** e a **confiança** de cada chamada (ver seção 7) |
-| `--action-tools` | `MIRANTE_ACTION_TOOLS` | — | tools que executam ações mesmo sem o nome dizer (ver seção 8) |
+| `--inject-reasoning` | `MIRANTE_INJECT_REASONING=true` | desligado | pede ao modelo o **porquê** e a **confiança** de cada chamada (ver seção 8) |
+| `--action-tools` | `MIRANTE_ACTION_TOOLS` | — | tools que executam ações mesmo sem o nome dizer (ver seção 9) |
 | `--redact-keys` | `MIRANTE_REDACT_KEYS` | password, secret, token, api_key, authorization… | regex de chaves JSON mascaradas como `***` antes de chegar ao painel |
 | `--ingest-token` | `MIRANTE_INGEST_TOKEN` | aberto | bearer exigido em `POST /v1/events` |
 | `--events-url` | `MIRANTE_EVENTS_URL` | — | modo sidecar: manda eventos para o central em vez de servir o painel |
@@ -126,7 +126,7 @@ Só a URL dos MCP servers:
 + k8s-ts-mcp: http://mirante:8080/p/alfred/mcp/k8s-ts-mcp
 ```
 
-Para ver também as decisões do Claude (incluindo o *thinking*), instrumente com o SDK (seção 9). Os dois modos convivem no mesmo painel.
+Para ver também as decisões do Claude (incluindo o *thinking*), instrumente com o SDK (seção 10). Os dois modos convivem no mesmo painel.
 
 ### 4.4 Pedir para a IA fazer (Claude Code, Kiro…)
 
@@ -186,9 +186,81 @@ Validação manual com um agente real:
 | 4 | faça uma pergunta que use tool | no telão, o pacote anda **agente → server → tool** e volta verde. No feed, aparece um card com a pergunta |
 | 5 | clique no card | linha do tempo com decisões e tools, **payload enviado** e **retorno** |
 | 6 | compare a resposta do agente com e sem o mirante | **idêntica**: o proxy é transparente |
-| 7 | pare o mirante e repita a pergunta | no modo central, o agente perde LLM/MCP (por isso existe o sidecar, seção 6). No sidecar, o agente segue normal |
+| 7 | pare o mirante e repita a pergunta | no modo central, o agente perde LLM/MCP (por isso existe o sidecar, seção 7). No sidecar, o agente segue normal |
 
-## 6. Modo sidecar (sem ponto único de falha)
+## 6. Mirante na frente de um MCP que já roda no Kubernetes
+
+O cenário: um MCP server (ex: o hub-server do k8s-ts-mcp ou o ce-k8s-mcp) já roda 100% no cluster, e você quer o mirante na frente dele. O mirante é **outro Deployment** (o central, seção 3.2). **O MCP não muda nada**: nem imagem, nem réplicas, nem código. Você só cria um Service a mais e troca a URL dos clientes.
+
+### Por que precisa de um Service headless
+
+MCP Streamable HTTP feito com o go-sdk (opções padrão) guarda a sessão (`Mcp-Session-Id`) **na memória da réplica que fez o `initialize`**. Com várias réplicas atrás de um Service comum, o kube-proxy espalha as conexões (e o cliente MCP abre mais de uma), então parte das requisições cai na réplica errada e falha com `session not found`.
+
+O Service **headless** (`clusterIP: None`) faz o DNS devolver o IP de **cada pod**. O mirante escolhe um pod no `initialize`, guarda **sessão → pod** e manda o resto daquela sessão para o mesmo pod.
+
+Medido num cluster kind com um MCP stateful de 2 réplicas, usando o cliente oficial do go-sdk:
+
+| caminho | sessões com falha |
+|---|---|
+| cliente → Service do MCP (como é hoje) | **13%** (100 sessões); **17%** matando um pod no meio (300 sessões) |
+| cliente → mirante → Service headless | **0%**; matando um pod, **1** em 300 (a sessão que estava em andamento no pod morto) |
+
+> **Cookie de sticky session no ALB não resolve para clientes Go:** o cliente MCP do go-sdk usa `http.DefaultClient`, que não guarda cookies. Então a afinidade por cookie no Ingress não vale para wb-ce-agent, ce CLI e outros clientes Go. A afinidade no mirante não depende do cliente.
+
+### Passo a passo
+
+**1. (Opcional) Diagnostique o MCP atual.** A ferramenta `examples/mcp-sessoes` abre N sessões e conta as falhas. Ela precisa rodar **dentro do cluster** para passar pelo kube-proxy:
+
+```bash
+docker build --build-arg CMD=./examples/mcp-sessoes -t <registry>/mcp-sessoes:1 . && docker push <registry>/mcp-sessoes:1
+kubectl -n k8s-ts-mcp run diag --rm -it --restart=Never --image=<registry>/mcp-sessoes:1 -- http://hub-server-mcp.k8s-ts-mcp.svc:8443 30
+# MCP com token: acrescente  --env=MCP_BEARER_TOKEN=...
+```
+
+Saída com `sessoes_falhas` > 0 e `session not found` = o problema existe hoje, com ou sem mirante. Se o erro for de **conexão** (timeout, `connection refused`), não é o problema de sessão: é a NetworkPolicy do MCP bloqueando a porta. É o caso do hub-server, cuja policy só libera a `:7443`. Nesse caso, pule para o passo 2.
+
+**2. Crie o Service headless** (e, se o MCP já tiver NetworkPolicy, a regra que libera o mirante). Exemplos prontos para o hub-server e o ce-k8s-mcp:
+
+```bash
+kubectl apply -f deploy/k8s/mirante-na-frente-do-mcp.yaml
+```
+
+> **NetworkPolicy, cuidado nos dois sentidos:**
+> - O hub-server **já** é isolado: a policy dele só libera a `:7443`, o que bloqueia a `:8443` para todo o resto. Sem a regra `hub-server-mcp-from-mirante`, o mirante não conecta. Validado em kind: sem a regra, bloqueado; com ela, conecta; outro pod sem o label `app: mirante`, continua bloqueado.
+> - Num MCP **sem** NetworkPolicy (o ce-k8s-mcp), **não** crie uma "só para liberar o mirante". A existência dela isola os pods e bloqueia todo o resto, inclusive o ALB atual.
+
+**3. Aponte o mirante para o headless** no ConfigMap (`MIRANTE_MCP`), atento ao caminho do MCP (hub-server na raiz; ce-k8s-mcp em `/mcp`):
+
+```
+k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc.cluster.local:8443
+ce-k8s-mcp=http://ce-k8s-mcp-headless.ce.svc.cluster.local:8080/mcp
+```
+
+Depois aplique a mudança com `kubectl -n observabilidade rollout restart deploy/mirante`.
+
+**4. Troque a URL nos clientes** para `http://mirante.observabilidade:8080/p/<agente>/mcp/<server>`. Tokens (`Authorization`) passam intactos: o MCP continua autenticando e identificando o cliente como hoje.
+
+**5. Verifique.** Rode o diagnóstico pelo mirante (esperado: `sessoes_falhas=0`):
+
+```bash
+kubectl -n k8s-ts-mcp run diag --rm -it --restart=Never --image=<registry>/mcp-sessoes:1 -- http://mirante.observabilidade:8080/p/diagnostico/mcp/k8s-ts-mcp 30
+```
+
+O diagnóstico conversa com o mirante, e quem conversa com o MCP é o pod do mirante (que tem o label liberado), então ele pode rodar de qualquer namespace. No painel, **cada sessão MCP vira um run** ("sessão MCP XXXXXXXX"), fechado quando o cliente encerra a sessão. Sessões longas, como de um poller, viram um run novo a cada 200 chamadas.
+
+### Como a afinidade se comporta
+
+- **Sessão nova:** vai para um pod aleatório (como o kube-proxy). Daí em diante, todas as requisições dela (POST, stream GET, DELETE) vão para o mesmo pod.
+- **Pod morre:** some do DNS headless em segundos (o mirante consulta de novo a cada 3 s). Se o pod recusar conexão antes disso, ele vai para uma **quarentena de 30 s**. Sessões que estavam nele recebem `session not found` e o cliente precisa reabrir a sessão, exatamente como acontece hoje quando um pod do MCP reinicia.
+- **O header `Host` original é preservado**, então um upstream atrás de ALB/Ingress que roteia por nome continua funcionando. Um Service comum (1 IP) ou um host externo seguem funcionando como antes.
+- **Upstream `https`:** a afinidade fica desligada (o certificado não valeria para o IP do pod). Dentro do cluster, use `http` para o headless.
+- **O mapa sessão → pod fica em memória:** se o **mirante** reiniciar, as sessões abertas perdem o vínculo e os clientes precisam reabri-las. Por isso o mirante roda com `replicas: 1`.
+
+> **Recomendação para os clientes:** reconectar a sessão MCP ao receber `session not found`. Isso já é necessário hoje em qualquer reinício de pod do MCP, com ou sem mirante.
+
+**Alternativa sem mirante:** se as tools do MCP não dependem de estado por sessão, ele pode rodar em modo sem sessão (`&mcp.StreamableHTTPOptions{Stateless: true}` no go-sdk), e qualquer réplica atende qualquer requisição. No hub-server, a identidade do agente é resolvida a partir do `Authorization` da sessão (`newSessionServer`). Avalie se essa resolução pode ser feita por requisição antes de mudar.
+
+## 7. Modo sidecar (sem ponto único de falha)
 
 No modo central, se o mirante cair, o agente perde o caminho até o LLM e o MCP. No **sidecar**, um mirante leve roda **no mesmo pod do agente** e só faz proxy. Os eventos vão em lote, de forma assíncrona, para o mirante central. Se o central cair, o sidecar descarta eventos e o agente não percebe.
 
@@ -201,7 +273,7 @@ pod do agente: [ agente ] ──localhost──▶ [ mirante --events-url ] ─�
 
 Exemplo em [`deploy/k8s/sidecar-exemplo.yaml`](../deploy/k8s/sidecar-exemplo.yaml). No agente, as URLs passam a apontar para `http://localhost:8081/p/<agente>/...`.
 
-## 7. Injeção de raciocínio (`--inject-reasoning`)
+## 8. Injeção de raciocínio (`--inject-reasoning`)
 
 Modelos menores (ex: `qwen2.5:7b`) chamam tool sem explicar o motivo. Com esta opção, o mirante:
 
@@ -218,7 +290,7 @@ Garantias, validadas com `qwen2.5:7b` real:
 
 Limite: a confiança é **auto-reportada** pelo modelo e mal calibrada. O painel trata isso como um sinal entre vários, nunca como prova.
 
-## 8. Detecção de alucinação
+## 9. Detecção de alucinação
 
 Roda no mirante, sobre o que ele observa. Funciona igual para qualquer modelo.
 
@@ -239,17 +311,17 @@ Roda no mirante, sobre o que ele observa. Funciona igual para qualquer modelo.
 2. anotações MCP no `tools/list`: `readOnlyHint: false` ou `destructiveHint: true`. **Recomendado: anote suas tools no MCP server**;
 3. palavras no nome da tool (`scale_deployment`, `record_lesson`, `delete_pod`…), comparadas por token: `get_settings` não conta como "set".
 
-## 9. Modo SDK (Go) e HTTP direto
+## 10. Modo SDK (Go) e HTTP direto
 
 Use quando quiser algo que o proxy não vê, como o *thinking* do Claude no Bedrock ou um sinal de LLM-judge. O SDK é assíncrono, envia em lote, descarta eventos se o painel cair e é **no-op com URL vazia**. Detalhes e exemplo no [README](../README.md#instrumentar-um-agente-go). Para outras linguagens, o contrato JSON de `POST /v1/events` também está no README.
 
-## 10. Segurança
+## 11. Segurança
 
 - **Segredos:** headers (`Authorization`, tokens) são repassados, mas **nunca gravados nem exibidos**. Chaves JSON que casam com `--redact-keys` viram `***` em argumentos e retornos. Mesmo assim, o payload aparece no telão: revise o regex para o seu domínio.
 - **Rede:** o mirante não tem autenticação de leitura própria. Exponha o painel só na rede interna, ou atrás do Ingress com SSO. Use `--ingest-token` se `/v1/events` ficar acessível fora do cluster.
 - **Upstreams fixos:** o proxy só encaminha para os nomes configurados em `--llm`/`--mcp`. Um nome desconhecido devolve 404, então o mirante não vira um proxy aberto.
 
-## 11. Problemas comuns
+## 12. Problemas comuns
 
 | sintoma | causa provável | o que fazer |
 |---|---|---|
@@ -261,7 +333,7 @@ Use quando quiser algo que o proxy não vê, como o *thinking* do Claude no Bedr
 | muitos 🟡 `baixa_confianca` | modelo pequeno com `--inject-reasoning` | ajuste `--min-confidence` (ex: `0.4`) ou `0` para desligar |
 | nada aparece no telão | navegador sem acesso ao `/api/stream` (proxy/ingress bufferizando SSE) | o mirante manda `X-Accel-Buffering: no`. Confira o timeout de leitura do Ingress (≥ 60 s) |
 
-## 12. Limitações conhecidas (v1)
+## 13. Limitações conhecidas (v1)
 
 - Estado em memória, 1 réplica. Reiniciou, o histórico do painel zera (os agentes não são afetados).
 - A detecção é heurística. Ela pega identificador inventado, tool/argumento inventado e ação afirmada sem tool, mas **não** pega afirmação falsa em texto corrido ("o cluster está saudável"). Para isso, use um LLM-judge e mande o sinal via SDK (`run.Flag`).

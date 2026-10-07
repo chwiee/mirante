@@ -1,0 +1,80 @@
+# mirante na frente de um MCP server que já roda no Kubernetes.
+#
+# O mirante central (deploy/k8s/mirante.yaml) é OUTRO Deployment; o MCP não
+# muda nada — nem imagem, nem réplicas, nem código. Este arquivo só adiciona,
+# no namespace de cada MCP:
+#   1. um Service HEADLESS (o DNS devolve o IP de cada pod);
+#   2. quando o MCP já tem NetworkPolicy, uma regra liberando o mirante.
+# e o upstream correspondente no ConfigMap do mirante (MIRANTE_MCP).
+#
+# Por que headless: MCP Streamable HTTP do go-sdk guarda a sessão
+# (Mcp-Session-Id) na memória da réplica que fez o initialize. Pelo Service
+# normal, o kube-proxy espalha as conexões e as sessões quebram com
+# "session not found". Pelo headless, o mirante enxerga cada pod e prende
+# cada sessão ao pod que a criou. Medido em kind, 2 réplicas:
+#   direto no Service ............ 13% das sessões falham (17% matando um pod)
+#   mirante + Service headless ... 0%  (1 sessão, a que estava no pod morto)
+# Diagnóstico do seu MCP: examples/mcp-sessoes (docs/IMPLANTACAO.md, seção 6).
+#
+# Os clientes passam a usar:
+#   http://mirante.observabilidade:8080/p/<agente>/mcp/<server>
+# Para desfazer: voltar a URL dos clientes; estes recursos podem ficar.
+
+# ─────────────────────────── k8s-ts-mcp (hub-server) ───────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-server-mcp-headless
+  namespace: k8s-ts-mcp
+  labels: {app: hub-server, mirante: upstream}
+spec:
+  clusterIP: None            # headless: um registro DNS por pod pronto
+  selector: {app: hub-server}
+  ports:
+    - {name: mcp-http, port: 8443, targetPort: mcp-http}
+---
+# O hub-server JÁ é isolado pela NetworkPolicy "hub-server-grpc-internal-only"
+# (só libera :7443 de dentro do namespace — o que, pela semântica de
+# NetworkPolicy, bloqueia a :8443 para todo o resto). Esta regra soma-se a ela
+# e libera a :8443 só para os pods do mirante. Validado em kind: sem ela, o
+# mirante não conecta; com ela, conecta; outro pod do mesmo namespace do
+# mirante, sem o label app=mirante, continua bloqueado.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hub-server-mcp-from-mirante
+  namespace: k8s-ts-mcp
+spec:
+  podSelector: {matchLabels: {app: hub-server}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observabilidade}}
+          podSelector: {matchLabels: {app: mirante}}
+      ports: [{protocol: TCP, port: 8443}]
+---
+# ─────────────────────────────── ce-k8s-mcp ───────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: ce-k8s-mcp-headless
+  namespace: ce
+  labels: {app: ce-k8s-mcp, mirante: upstream}
+spec:
+  clusterIP: None
+  selector: {app: ce-k8s-mcp}
+  ports:
+    - {name: http, port: 8080, targetPort: http}   # porta do POD (o Service normal expõe 80 → http)
+# SEM NetworkPolicy aqui, de propósito: o ce-k8s-mcp não tem nenhuma hoje, e
+# criar uma (mesmo só "liberando o mirante") ISOLARIA os pods — tudo que não
+# for o mirante passaria a ser bloqueado, inclusive o ALB atual.
+---
+# ───────────────────── upstreams no mirante (ConfigMap) ─────────────────────
+# Em deploy/k8s/mirante.yaml, MIRANTE_MCP deve apontar para os headless.
+# Atenção ao caminho: o hub-server serve MCP na raiz; o ce-k8s-mcp em /mcp.
+#
+#   MIRANTE_MCP: "k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc.cluster.local:8443,ce-k8s-mcp=http://ce-k8s-mcp-headless.ce.svc.cluster.local:8080/mcp"
+#
+# Tokens (Authorization: Bearer …) passam intactos pelo mirante: o
+# ce-k8s-mcp continua validando o CE_K8S_MCP_TOKEN do cliente e o hub-server
+# continua resolvendo a identidade do agente pelo header, como hoje.

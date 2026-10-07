@@ -11,6 +11,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,12 +40,18 @@ type Config struct {
 	RedactKeys      *regexp.Regexp    // nil = não redige
 	Emit            func(*event.Event)
 	Log             *slog.Logger
+
+	// lookup substitui a resolução DNS da afinidade (testes).
+	lookup func(ctx context.Context, host string) ([]string, error)
 }
 
 type Proxy struct {
 	cfg  Config
 	corr *correlator
 	stop chan struct{}
+
+	affMu sync.Mutex
+	aff   map[string]*affinity // MCP server → afinidade de sessão
 }
 
 func New(cfg Config) *Proxy {
@@ -121,7 +128,7 @@ func (p *Proxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	dialect := detectDialect(rest)
 	if r.Method != http.MethodPost || dialect == "" {
-		p.forward(w, r, up, rest, nil, nil, nil) // /api/tags, /v1/models… passam direto
+		p.forward(w, r, up, "", rest, nil, nil, nil) // /api/tags, /v1/models… passam direto
 		return
 	}
 
@@ -132,7 +139,7 @@ func (p *Proxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	req, raw, ok := parseChatReq(dialect, body)
 	if !ok {
-		p.forward(w, r, up, rest, body, nil, nil)
+		p.forward(w, r, up, "", rest, body, nil, nil)
 		return
 	}
 
@@ -172,7 +179,7 @@ func (p *Proxy) handleLLM(w http.ResponseWriter, r *http.Request) {
 		})
 		return nil
 	}
-	p.forward(w, r, up, rest, body, modify, func(err error) { p.corr.llmError(t, err.Error()) })
+	p.forward(w, r, up, "", rest, body, modify, func(err error) { p.corr.llmError(t, err.Error()) })
 }
 
 // ---------- MCP ----------
@@ -195,8 +202,17 @@ func (p *Proxy) handleMCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("mirante: MCP server %q não configurado (use --mcp %s=URL)", server, server), http.StatusNotFound)
 		return
 	}
+	// afinidade de sessão: com upstream headless (vários pods), cada sessão
+	// MCP fica presa ao pod que a criou — ver affinity.go
+	aff := p.affinityFor(server, up)
+	sid := r.Header.Get("Mcp-Session-Id")
+	backend := aff.pick(sid)
+	target := aff.target(up, backend)
+	if r.Method == http.MethodDelete {
+		p.corr.mcpSessionEnd(agent, sid) // cliente encerrou a sessão: fecha o run dela
+	}
 	if r.Method != http.MethodPost {
-		p.forward(w, r, up, rest, nil, nil, nil) // GET (stream do servidor) e DELETE (fim de sessão)
+		p.forward(w, r, target, aff.hostHeader(backend), rest, nil, aff.wrap(nil, r.Method, sid, backend), aff.onErr(backend, nil)) // GET (stream do servidor) e DELETE (fim de sessão)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<20))
@@ -222,13 +238,13 @@ func (p *Proxy) handleMCP(w http.ResponseWriter, r *http.Request) {
 			if len(prm.Arguments) == 0 {
 				prm.Arguments = json.RawMessage(`{}`)
 			}
-			calls[string(m.ID)] = p.corr.mcpCallStart(agent, server, prm.Name, prm.Arguments)
+			calls[string(m.ID)] = p.corr.mcpCallStart(agent, server, prm.Name, sid, prm.Arguments)
 		case "tools/list":
 			lists[string(m.ID)] = true
 		}
 	}
 	if len(calls) == 0 && len(lists) == 0 {
-		p.forward(w, r, up, rest, body, nil, nil)
+		p.forward(w, r, target, aff.hostHeader(backend), rest, body, aff.wrap(nil, r.Method, sid, backend), aff.onErr(backend, nil))
 		return
 	}
 
@@ -269,7 +285,7 @@ func (p *Proxy) handleMCP(w http.ResponseWriter, r *http.Request) {
 		})
 		return nil
 	}
-	p.forward(w, r, up, rest, body, modify, func(err error) { failAll(err.Error()) })
+	p.forward(w, r, target, aff.hostHeader(backend), rest, body, aff.wrap(modify, r.Method, sid, backend), aff.onErr(backend, func(err error) { failAll(err.Error()) }))
 }
 
 // sanitizeCalls é a rede de segurança da injeção de raciocínio: se um campo
@@ -428,7 +444,9 @@ func toolSpecs(raw json.RawMessage) []event.ToolSpec {
 
 // ---------- encaminhamento ----------
 
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, upstream, rest string, body []byte,
+// host, se não vazio, vira o header Host enviado (afinidade: o destino é o
+// IP do pod, mas o Host continua o nome original — ALB/Ingress roteiam por ele).
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, upstream, host, rest string, body []byte,
 	modify func(*http.Response) error, onErr func(error)) {
 	target, err := url.Parse(upstream)
 	if err != nil {
@@ -442,6 +460,9 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, upstream, rest s
 			pr.Out.URL.Path = joinPath(target.Path, rest)
 			pr.Out.URL.RawPath = ""
 			pr.Out.URL.RawQuery = r.URL.RawQuery
+			if host != "" {
+				pr.Out.Host = host
+			}
 			if observing {
 				pr.Out.Header.Del("Accept-Encoding") // corpo sem gzip para conseguir ler
 			}

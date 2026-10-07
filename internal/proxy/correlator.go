@@ -26,19 +26,20 @@ import (
 // observado (ex: Bedrock, Claude Code), as chamadas MCP viram um run
 // sintético por sessão de atividade.
 type correlator struct {
-	mu      sync.Mutex
-	emit    func(*event.Event)
-	idleMCP time.Duration
-	idleLLM time.Duration
-	agents  map[string]*agentState
-	redact  func(json.RawMessage) json.RawMessage
+	mu          sync.Mutex
+	emit        func(*event.Event)
+	idleMCP     time.Duration // run sintético sem sessão: fecha após este silêncio
+	idleSession time.Duration // sessão MCP sem DELETE: fecha após este silêncio
+	idleLLM     time.Duration
+	agents      map[string]*agentState
+	redact      func(json.RawMessage) json.RawMessage
 }
 
 type agentState struct {
 	runs       map[string]*llmRun // chave do turno → run aberto
 	toolServer map[string]string  // tool → MCP server (aprendido no tools/list)
 	tools      map[string]event.ToolSpec
-	mcpRun     *mcpRun
+	mcpRuns    map[string]*mcpRun // Mcp-Session-Id → run sintético ("" = sem sessão)
 }
 
 type llmRun struct {
@@ -62,16 +63,17 @@ type mcpRun struct {
 	id       string
 	lastSeen time.Time
 	inflight int
+	calls    int
 }
 
 func newCorrelator(emit func(*event.Event), redact func(json.RawMessage) json.RawMessage) *correlator {
-	return &correlator{emit: emit, redact: redact, idleMCP: 20 * time.Second, idleLLM: 10 * time.Minute, agents: map[string]*agentState{}}
+	return &correlator{emit: emit, redact: redact, idleMCP: 20 * time.Second, idleSession: 2 * time.Minute, idleLLM: 10 * time.Minute, agents: map[string]*agentState{}}
 }
 
 func (c *correlator) agent(name string) *agentState {
 	a := c.agents[name]
 	if a == nil {
-		a = &agentState{runs: map[string]*llmRun{}, toolServer: map[string]string{}, tools: map[string]event.ToolSpec{}}
+		a = &agentState{runs: map[string]*llmRun{}, toolServer: map[string]string{}, tools: map[string]event.ToolSpec{}, mcpRuns: map[string]*mcpRun{}}
 		c.agents[name] = a
 	}
 	return a
@@ -287,9 +289,10 @@ type mcpCall struct {
 	runID, span         string
 	start               time.Time
 	synthetic           bool
+	sessKey             string
 }
 
-func (c *correlator) mcpCallStart(agent, server, tool string, args json.RawMessage) *mcpCall {
+func (c *correlator) mcpCallStart(agent, server, tool, sessionKey string, args json.RawMessage) *mcpCall {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a := c.agent(agent)
@@ -320,34 +323,57 @@ func (c *correlator) mcpCallStart(agent, server, tool string, args json.RawMessa
 		return call
 	}
 
-	// 2) sem LLM observado: run sintético por janela de atividade
-	if a.mcpRun == nil || (a.mcpRun.inflight == 0 && time.Since(a.mcpRun.lastSeen) > c.idleMCP) {
-		if a.mcpRun != nil {
-			c.send(agent, &event.Event{Type: event.RunEnd, RunID: a.mcpRun.id})
-		}
-		a.mcpRun = &mcpRun{id: newID()}
+	// 2) sem LLM observado: run sintético por SESSÃO MCP (Mcp-Session-Id);
+	// sem sessão (server stateless), por janela de atividade.
+	key := sessionKey
+	r := a.mcpRuns[key]
+	if r != nil && (r.calls >= maxCallsPerRun || (key == "" && r.inflight == 0 && time.Since(r.lastSeen) > c.idleMCP)) {
+		c.send(agent, &event.Event{Type: event.RunEnd, RunID: r.id}) // vira: run novo
+		r = nil
+	}
+	if r == nil {
+		r = &mcpRun{id: newID()}
+		a.mcpRuns[key] = r
 		tools := make([]event.ToolSpec, 0, len(a.tools))
 		for _, t := range a.tools {
 			tools = append(tools, t)
 		}
-		c.send(agent, &event.Event{Type: event.RunStart, RunID: a.mcpRun.id,
-			Input: "(chamadas MCP diretas — LLM não passa pelo mirante)", Tools: tools})
+		input := "(chamadas MCP diretas — o LLM não passa pelo mirante)"
+		if key != "" {
+			input = "sessão MCP " + shortID(key) + " (o LLM não passa pelo mirante)"
+		}
+		c.send(agent, &event.Event{Type: event.RunStart, RunID: r.id, Input: input, Tools: tools})
 	}
-	a.mcpRun.inflight++
-	a.mcpRun.lastSeen = call.start
-	call.runID, call.span, call.synthetic = a.mcpRun.id, newID(), true
+	r.inflight++
+	r.calls++
+	r.lastSeen = call.start
+	call.runID, call.span, call.synthetic, call.sessKey = r.id, newID(), true, key
 	c.send(agent, &event.Event{Type: event.ToolCall, RunID: call.runID, SpanID: call.span, Server: server, Tool: tool, Args: args})
 	return call
+}
+
+// mcpSessionEnd fecha o run da sessão quando o cliente encerra (DELETE).
+func (c *correlator) mcpSessionEnd(agent, sessionKey string) {
+	if sessionKey == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	a := c.agent(agent)
+	if r := a.mcpRuns[sessionKey]; r != nil {
+		c.send(agent, &event.Event{Type: event.RunEnd, RunID: r.id})
+		delete(a.mcpRuns, sessionKey)
+	}
 }
 
 func (c *correlator) mcpCallDone(call *mcpCall, result json.RawMessage, errMsg string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a := c.agent(call.agent)
-	if call.synthetic && a.mcpRun != nil && a.mcpRun.id == call.runID {
-		a.mcpRun.inflight--
-		a.mcpRun.lastSeen = time.Now()
-	} else {
+	if r := a.mcpRuns[call.sessKey]; call.synthetic && r != nil && r.id == call.runID {
+		r.inflight--
+		r.lastSeen = time.Now()
+	} else if !call.synthetic {
 		// marca resolvido para o lado LLM não emitir um segundo retorno
 		for _, r := range a.runs {
 			for _, p := range r.pending {
@@ -373,9 +399,15 @@ func (c *correlator) sweep() {
 				delete(a.runs, k)
 			}
 		}
-		if a.mcpRun != nil && a.mcpRun.inflight == 0 && now.Sub(a.mcpRun.lastSeen) > c.idleMCP {
-			c.send(name, &event.Event{Type: event.RunEnd, RunID: a.mcpRun.id})
-			a.mcpRun = nil
+		for k, r := range a.mcpRuns {
+			idle := c.idleMCP
+			if k != "" {
+				idle = c.idleSession // sessão sem DELETE (cliente morreu ou nunca fecha)
+			}
+			if r.inflight == 0 && now.Sub(r.lastSeen) > idle {
+				c.send(name, &event.Event{Type: event.RunEnd, RunID: r.id})
+				delete(a.mcpRuns, k)
+			}
 		}
 	}
 }
@@ -429,4 +461,15 @@ func jsonEqual(a, b json.RawMessage) bool {
 	xa, _ := json.Marshal(x)
 	ya, _ := json.Marshal(y)
 	return bytes.Equal(xa, ya)
+}
+
+// maxCallsPerRun: sessão MCP longa (ex: poller) vira run novo a cada N
+// chamadas, para nenhum run crescer sem limite no painel.
+const maxCallsPerRun = 200
+
+func shortID(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
 }
