@@ -86,13 +86,20 @@ func (c Config) ToolCall(run *event.Run, s *event.Step) []event.Flag {
 			"modelo reportou confiança %.2f ao chamar %s (mínimo %.2f)", *s.Confidence, s.Tool, c.MinConfidence))
 	}
 
-	n := 0
+	// "loop" só faz sentido quando um MODELO decidiu as chamadas. Num run só
+	// de MCP (cliente sem LLM visível: poller, script, Claude Code via modo
+	// front), repetir a mesma chamada é uso normal — visto ao vivo: cada
+	// chamada de um poller saía com alerta amarelo.
+	n, decided := 0, false
 	for _, prev := range run.Steps {
+		if prev.Kind == "decision" {
+			decided = true
+		}
 		if prev != s && prev.Kind == "tool" && prev.Tool == s.Tool && jsonEqual(prev.Args, s.Args) {
 			n++
 		}
 	}
-	if n > 0 {
+	if n > 0 && decided {
 		out = append(out, mk(event.LevelUncertain, "chamada_repetida",
 			"%s chamada com os mesmos argumentos pela %dª vez neste run — modelo pode estar em loop", s.Tool, n+1))
 	}

@@ -31,6 +31,7 @@ type correlator struct {
 	idleMCP     time.Duration // run sintético sem sessão: fecha após este silêncio
 	idleSession time.Duration // sessão MCP sem DELETE: fecha após este silêncio
 	idleLLM     time.Duration
+	discovered  map[string][]event.ToolSpec // server → tools descobertas pelo mirante
 	agents      map[string]*agentState
 	redact      func(json.RawMessage) json.RawMessage
 }
@@ -338,6 +339,9 @@ func (c *correlator) mcpCallStart(agent, server, tool, sessionKey string, args j
 		for _, t := range a.tools {
 			tools = append(tools, t)
 		}
+		if len(a.tools) == 0 { // cliente não chamou tools/list: vale a lista que o mirante descobriu
+			tools = append(tools, c.discovered[server]...)
+		}
 		input := "(chamadas MCP diretas — o LLM não passa pelo mirante)"
 		if key != "" {
 			input = "sessão MCP " + shortID(key) + " (o LLM não passa pelo mirante)"
@@ -472,4 +476,22 @@ func shortID(s string) string {
 		return s[:8]
 	}
 	return s
+}
+
+// mcpDiscovered publica server+tools descobertos pelo próprio mirante (sem
+// agente ligado) e guarda a lista oficial do server: runs de clientes que não
+// chamaram tools/list passam a ter contra o que checar tool inventada.
+func (c *correlator) mcpDiscovered(server string, specs []event.ToolSpec) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]event.ToolSpec, 0, len(specs))
+	for _, s := range specs {
+		s.Server = server
+		out = append(out, s)
+	}
+	if c.discovered == nil {
+		c.discovered = map[string][]event.ToolSpec{}
+	}
+	c.discovered[server] = out
+	c.send("", &event.Event{Type: event.ToolsEvt, Tools: out})
 }

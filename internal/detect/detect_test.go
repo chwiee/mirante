@@ -60,9 +60,14 @@ func TestToolCallSemToolsDeclaradasNaoAcusa(t *testing.T) {
 func TestChamadaRepetida(t *testing.T) {
 	a := &event.Step{Kind: "tool", Tool: "search_knowledge", Args: json.RawMessage(`{"query":"x"}`)}
 	b := &event.Step{Kind: "tool", Tool: "search_knowledge", Args: json.RawMessage(`{ "query": "x" }`)}
-	run := &event.Run{Steps: []*event.Step{a, b}}
+	d := &event.Step{Kind: "decision", Chosen: []string{"search_knowledge"}}
+	run := &event.Run{Steps: []*event.Step{d, a, d, b}}
 	if got := codes(Default.ToolCall(run, b)); got != "uncertain:chamada_repetida" {
 		t.Fatalf("got %q", got)
+	}
+	// sem decisão de modelo (cliente MCP direto, poller): repetir é normal
+	if got := codes(Default.ToolCall(&event.Run{Steps: []*event.Step{a, b}}, b)); got != "" {
+		t.Fatalf("run só de MCP não deveria acusar loop, veio %q", got)
 	}
 }
 

@@ -78,7 +78,7 @@ func main() {
 	redact := flag.String("redact-keys", envOr("MIRANTE_REDACT_KEYS", proxy.DefaultRedactKeys.String()), "regex de chaves JSON redigidas no proxy (vazio desliga)")
 	eventsURL := flag.String("events-url", os.Getenv("MIRANTE_EVENTS_URL"), "modo sidecar: manda eventos do proxy para este mirante central")
 	publicURL := flag.String("public-url", os.Getenv("MIRANTE_PUBLIC_URL"), "URL pela qual os agentes alcançam este mirante (vai nas instruções para IA em /ia; vazio = deduz da requisição)")
-	front := flag.String("front", os.Getenv("MIRANTE_FRONT"), "modo front: o mirante se passa pelo MCP server, na mesma URL que os clientes já usam (server=URL; ex: k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc:8443). Clientes não mudam nada; o nome do cliente vem do initialize")
+	front := flag.String("front", os.Getenv("MIRANTE_FRONT"), "modo front: o mirante se passa pelo MCP server, na mesma URL que os clientes já usam (server=URL; ex: k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc:8443). Clientes não mudam nada; o nome do cliente vem do initialize. O caminho na URL (ex: /mcp) é usado só para o mirante descobrir as tools ao subir; o caminho do cliente é sempre preservado")
 	frontAddr := flag.String("front-addr", envOr("MIRANTE_FRONT_ADDR", ":8081"), "porta do modo front (o Service/Ingress do MCP aponta para ela)")
 	flag.Parse()
 
@@ -157,6 +157,23 @@ func main() {
 		mode = "sidecar → " + *eventsURL
 	}
 	log.Info("mirante no ar", "url", base, "modo", mode, "llm", llm.String(), "mcp", mcp.String(), "inject_reasoning", *inject, "demo", *demoMode)
+
+	// descoberta: o mirante se conecta a cada MCP configurado e mostra server +
+	// tools no mapa ao subir, antes de qualquer cliente passar. Tokens só para
+	// isso, por env (não por flag, para não aparecerem na lista de processos):
+	// MIRANTE_MCP_TOKEN="server=token,outro=token".
+	tokens := upstreams{}
+	if v := os.Getenv("MIRANTE_MCP_TOKEN"); v != "" {
+		if err := tokens.Set(v); err != nil {
+			log.Error("config", "env", "MIRANTE_MCP_TOKEN", "err", err)
+		}
+	}
+	for name, u := range mcp {
+		go px.Discover(ctx, name, u, tokens[name])
+	}
+	if name, u, ok := strings.Cut(*front, "="); ok && *front != "" {
+		go px.Discover(ctx, name, u, tokens[name])
+	}
 
 	if *demoMode && srv != nil {
 		go demo.Run(ctx, base)

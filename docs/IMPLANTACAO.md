@@ -85,6 +85,7 @@ Os upstreams ficam no ConfigMap, em `MIRANTE_LLM` e `MIRANTE_MCP`. Para adiciona
 | `--public-url` | `MIRANTE_PUBLIC_URL` | deduzida da requisição | URL que os agentes usam para chegar ao mirante; vai nas instruções para IA em `/ia` |
 | `--front server=url` | `MIRANTE_FRONT` | — | **modo front**: o mirante escuta no lugar do MCP (mesma URL e caminho), sem nada mudar nos clientes. A URL é só `esquema://host:porta` (seção 6.1) |
 | `--front-addr` | `MIRANTE_FRONT_ADDR` | `:8081` | porta do modo front (o Service/Ingress do MCP aponta para ela) |
+| — | `MIRANTE_MCP_TOKEN` | — | tokens **só para a descoberta** de MCPs que exigem `Authorization` (`server=token,outro=token`). Por env, não por flag, para não aparecer na lista de processos. Os clientes seguem mandando o próprio token |
 | `--min-confidence` | — | `0.6` | abaixo disso, a chamada fica marcada como incerteza |
 | `--max-runs` | — | `500` | quantos runs ficam em memória |
 
@@ -230,6 +231,34 @@ Como ler esses números:
 - Sob saturação artificial (32 sessões numa só máquina, contra uma tool que não faz nada), a vazão máxima do conjunto cai pela metade, porque o mirante divide a CPU com o MCP. É um cenário de pior caso, longe de tráfego real. Dê ao container do mirante sua própria reserva de CPU (`requests`).
 
 **Como escolher:** se o MCP tem várias réplicas e sofre de `session not found` (diagnóstico no passo 1 da 6.3), vá de **A**, que resolve isso de brinde. Se o MCP já funciona bem e você não quer nem um salto a mais nem um ponto único, vá de **B**.
+
+**O MCP aparece no mapa já ao subir.** O mirante se conecta ao MCP como cliente, lista as tools e mostra server e tools ("sem chamadas") antes de qualquer cliente passar, repetindo a cada 5 minutos para acompanhar tools novas. Essa sessão de descoberta não vira run no painel.
+
+- **Caminho:** se a URL do `--front` (ou do `--mcp`) trouxer o caminho do MCP (ex: `http://host:9000/mcp`), ele é usado. Se não trouxer, o mirante tenta `/` e depois `/mcp`.
+- **Token:** se o MCP exige `Authorization`, informe um token **só para a descoberta**, por variável de ambiente (não por flag, para não aparecer na lista de processos): `MIRANTE_MCP_TOKEN="ce-k8s-mcp=<token>"`. Os clientes continuam mandando o próprio token, que o mirante só repassa.
+- **Se não aparecer**, o log do mirante diz por quê e o que fazer, ex: `descoberta do MCP falhou … dica="o MCP exige token: defina MIRANTE_MCP_TOKEN=…"`. O MCP ainda aparece assim que um cliente passar.
+
+#### Testar na sua máquina, com port-forward do EKS
+
+Três terminais. O mirante fica entre o cliente e o MCP:
+
+```bash
+kubectl -n ce port-forward svc/ce-k8s-mcp 9000:80
+```
+
+```bash
+MIRANTE_MCP_TOKEN="ce-k8s-mcp=<token>" go run ./cmd/mirante --front ce-k8s-mcp=http://localhost:9000 --front-addr :8081
+```
+
+Abra http://localhost:8080. O `ce-k8s-mcp` e as tools dele aparecem em segundos. Depois, faça um cliente chamar `http://localhost:8081/mcp` em vez de `http://localhost:9000/mcp`. Só a porta muda. Por exemplo, a ferramenta de diagnóstico:
+
+```bash
+MCP_BEARER_TOKEN=<token> go run ./examples/mcp-sessoes http://localhost:8081/mcp 3
+```
+
+Ou o Claude Code (`claude mcp add --transport http ce-k8s-mcp-mirante http://localhost:8081/mcp --header "Authorization: Bearer <token>"`). O cliente aparece no mapa ligado ao MCP, e cada chamada mostra argumentos, retorno e tempo.
+
+> O port-forward liga a **um pod só**, então o problema de sessão com várias réplicas (6.2) não aparece nesse teste.
 
 ### 6.2 Por que precisa de um Service headless
 

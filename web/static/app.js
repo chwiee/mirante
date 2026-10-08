@@ -101,7 +101,7 @@
       if (!servers.has(s)) servers.set(s, new Map());
       const tools = servers.get(s);
       tools.set(tool, (tools.get(tool) || false) || declared);
-      aEdges.add(a + '|' + s);
+      if (a) aEdges.add(a + '|' + s); // agente vazio = MCP descoberto pelo mirante, ainda sem cliente
     }
     for (const r of state.runs.values()) agents.add(r.agent);
     return { agents: [...agents].filter(Boolean), servers, aEdges };
@@ -360,11 +360,16 @@
     if (u.seq <= state.seq) return;
     state.seq = u.seq;
     const e = u.event, run = u.run;
-    if (e.type === 'tools') { // agente conectou num MCP server: só topologia
-      agentColor(e.agent);
+    if (e.type === 'tools') { // agente conectou num MCP server (ou o mirante descobriu o MCP): só topologia
+      const agent = e.agent || ''; // vazio = descoberta do mirante, sem cliente ainda
+      if (agent) agentColor(agent);
       let changed = false;
-      for (const tl of e.tools || []) changed = addTopo(e.agent, tl.server, tl.name, true) || changed;
-      if (changed || !nodes.has(nid.a(e.agent))) { layout(true); flash(nid.a(e.agent), agentColor(e.agent)); }
+      for (const tl of e.tools || []) changed = addTopo(agent, tl.server, tl.name, true) || changed;
+      if (changed || (agent && !nodes.has(nid.a(agent)))) {
+        layout(true);
+        if (agent) flash(nid.a(agent), agentColor(agent));
+        else if (e.tools?.length) flash(nid.s(e.tools[0].server), 'var(--server)');
+      }
       return;
     }
     agentColor(run.agent);

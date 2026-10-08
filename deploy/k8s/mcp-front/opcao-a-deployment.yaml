@@ -53,6 +53,9 @@ spec:
             - --front-addr=:8081
             - --events-url=http://mirante.observabilidade:8080   # painel central
             - --addr=:8090                                       # porta interna (saúde)
+          # env:   # se o MCP exige Authorization, token só para a descoberta (mostrar o MCP no mapa ao subir)
+          #   - name: MIRANTE_MCP_TOKEN
+          #     valueFrom: {secretKeyRef: {name: ce-k8s-mcp, key: mirante-discovery}}   # valor: "ce-k8s-mcp=<token>"
           ports:
             - {name: front, containerPort: 8081}
           readinessProbe:
