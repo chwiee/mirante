@@ -45,6 +45,8 @@ O botão **"+ Conectar agente"** no painel gera essas URLs. O mirante repassa tu
 
 ➡️ **Pedir para a IA integrar** (Claude Code, Kiro): o mirante serve a instrução pronta em `/ia`. Ver [guia, seção 4.4](docs/IMPLANTACAO.md#44-pedir-para-a-ia-fazer-claude-code-kiro).
 
+➡️ **Agente no mesmo cluster ou LLM assinado (Bedrock):** mande eventos por HTTP direto em `/v1/events` (sem importar o SDK privado). Contrato, cliente Go de ~60 linhas, SDK privado e GitHub EMU: [`docs/INTEGRACAO-AGENTES.md`](docs/INTEGRACAO-AGENTES.md)
+
 ➡️ **Agente de exemplo que não importa nada do mirante:** [`examples/agente-minimo`](examples/agente-minimo/main.go)
 
 ## Detecção de alucinação
