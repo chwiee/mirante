@@ -107,9 +107,33 @@
     return { agents: [...agents].filter(Boolean), servers, aEdges };
   }
 
+  // Zoom do mapa: k = escala (1 = cabe na tela), x/y = canto do viewBox.
+  const ZOOM_MIN = 0.4, ZOOM_MAX = 4;
+  const view = { k: 1, x: 0, y: 0 };
+  let base = { W: 1200, H: 700 };
+  function applyView() {
+    const w = base.W / view.k, h = base.H / view.k;
+    // o centro da janela nunca sai do mapa: impossível "perder" o desenho
+    view.x = Math.min(Math.max(view.x, -w / 2), base.W - w / 2);
+    view.y = Math.min(Math.max(view.y, -h / 2), base.H - h / 2);
+    svg.setAttribute('viewBox', `${view.x} ${view.y} ${w} ${h}`);
+    svg.classList.toggle('zoomed', view.k !== 1);
+    $('zoom-reset').textContent = Math.round(view.k * 100) + '%';
+  }
+  // zoomAt mantém parado o ponto (px, py) da tela, em fração 0..1 (padrão: centro).
+  function zoomAt(f, px = 0.5, py = 0.5) {
+    const k = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, view.k * f));
+    view.x += (base.W / view.k - base.W / k) * px;
+    view.y += (base.H / view.k - base.H / k) * py;
+    view.k = k;
+    applyView();
+  }
+  function resetView() { view.k = 1; view.x = 0; view.y = 0; applyView(); }
+
   function layout(animate = true) {
     const W = svg.clientWidth || 1200, H = svg.clientHeight || 700;
-    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    base = { W, H };
+    applyView();
     const { agents, servers, aEdges } = graph();
     let cx = W / 2, cy = H / 2 - 14;
     let rx = Math.max(160, W / 2 - 150), ry = Math.max(120, H / 2 - 70);
@@ -296,9 +320,11 @@
         lp = lp < 0.5 ? 2 * lp * lp : 1 - Math.pow(-2 * lp + 2, 2) / 2;
         const { path, rev } = segs[idx];
         const len = path.getTotalLength();
-        const pt = path.getPointAtLength(len * (rev ? 1 - lp : lp));
-        dot.setAttribute('cx', pt.x);
-        dot.setAttribute('cy', pt.y);
+        if (len > 0) { // aresta recém-criada ainda sem traçado: espera o próximo frame
+          const pt = path.getPointAtLength(len * (rev ? 1 - lp : lp));
+          dot.setAttribute('cx', pt.x);
+          dot.setAttribute('cy', pt.y);
+        }
         if (p < 1) requestAnimationFrame(frame);
         else { clearTimeout(guard); dot.remove(); resolve(); }
       };
@@ -872,6 +898,46 @@
   });
   let rz = 0;
   addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => layout(false), 120); });
+
+  // ---------- zoom e arraste do mapa ----------
+  // O layout continua em coordenadas de tela (base); o zoom só muda o viewBox,
+  // então nós, animações e cliques não precisam saber dele.
+  $('zoom-in').addEventListener('click', () => zoomAt(1.25));
+  $('zoom-out').addEventListener('click', () => zoomAt(1 / 1.25));
+  $('zoom-reset').addEventListener('click', resetView);
+  svg.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const r = svg.getBoundingClientRect();
+    zoomAt(Math.exp(-ev.deltaY * 0.0015), (ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height);
+  }, { passive: false });
+  let drag = null;
+  svg.addEventListener('pointerdown', (ev) => {
+    if (ev.button === 0) drag = { x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y, moved: false };
+  });
+  addEventListener('pointermove', (ev) => {
+    if (!drag) return;
+    const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return; // clique, não arraste
+    drag.moved = true;
+    svg.classList.add('panning');
+    const s = base.W / view.k / (svg.clientWidth || base.W); // px de tela -> unidades do viewBox
+    view.x = drag.vx - dx * s;
+    view.y = drag.vy - dy * s;
+    applyView();
+  });
+  addEventListener('pointerup', () => {
+    if (drag?.moved) setTimeout(() => (drag = null)); // deixa o click abaixo ver que foi arraste
+    else drag = null;
+    svg.classList.remove('panning');
+  });
+  // Soltar um arraste em cima de um nó não abre o nó.
+  svg.addEventListener('click', (ev) => { if (drag?.moved) ev.stopPropagation(); }, true);
+  addEventListener('keydown', (ev) => {
+    if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.target.closest?.('input, textarea, select')) return;
+    if (ev.key === '+' || ev.key === '=') zoomAt(1.25);
+    else if (ev.key === '-' || ev.key === '_') zoomAt(1 / 1.25);
+    else if (ev.key === '0') resetView();
+  });
 
   // ---------- conexão ----------
   function connect() {

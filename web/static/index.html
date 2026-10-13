@@ -21,6 +21,11 @@
 <main class="stage">
   <section class="map-wrap" aria-label="Mapa mental dos agentes">
     <svg id="map" role="img" aria-label="Agentes, MCP servers e tools"></svg>
+    <div class="zoom" role="group" aria-label="Zoom do mapa">
+      <button id="zoom-out" title="Afastar (−)" aria-label="Afastar">−</button>
+      <button id="zoom-reset" title="Voltar a caber na tela (0)" aria-label="Voltar o zoom para 100%">100%</button>
+      <button id="zoom-in" title="Aproximar (+)" aria-label="Aproximar">+</button>
+    </div>
     <div class="legend" aria-label="Legenda">
       <span><i class="lg-dot ok"></i>ok</span>
       <span><i class="lg-dot err"></i>erro de tool</span>
