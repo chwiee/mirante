@@ -65,6 +65,7 @@ type mcpRun struct {
 	lastSeen time.Time
 	inflight int
 	calls    int
+	servers  map[string]bool // servers cujas tools já estão no run
 }
 
 func newCorrelator(emit func(*event.Event), redact func(json.RawMessage) json.RawMessage) *correlator {
@@ -333,15 +334,14 @@ func (c *correlator) mcpCallStart(agent, server, tool, sessionKey string, args j
 		r = nil
 	}
 	if r == nil {
-		r = &mcpRun{id: newID()}
+		r = &mcpRun{id: newID(), servers: map[string]bool{}}
 		a.mcpRuns[key] = r
 		tools := make([]event.ToolSpec, 0, len(a.tools))
 		for _, t := range a.tools {
 			tools = append(tools, t)
+			r.servers[t.Server] = true
 		}
-		if len(a.tools) == 0 { // cliente não chamou tools/list: vale a lista que o mirante descobriu
-			tools = append(tools, c.discovered[server]...)
-		}
+		tools = append(tools, c.serverTools(r, server)...)
 		input := "(chamadas MCP diretas — o LLM não passa pelo mirante)"
 		if key != "" {
 			input = "sessão MCP " + shortID(key) + " (o LLM não passa pelo mirante)"
@@ -352,8 +352,25 @@ func (c *correlator) mcpCallStart(agent, server, tool, sessionKey string, args j
 	r.calls++
 	r.lastSeen = call.start
 	call.runID, call.span, call.synthetic, call.sessKey = r.id, newID(), true, key
-	c.send(agent, &event.Event{Type: event.ToolCall, RunID: call.runID, SpanID: call.span, Server: server, Tool: tool, Args: args})
+	c.send(agent, &event.Event{Type: event.ToolCall, RunID: call.runID, SpanID: call.span, Server: server, Tool: tool, Args: args,
+		Tools: c.serverTools(r, server)})
 	return call
+}
+
+// serverTools devolve, uma vez por run, as tools que o mirante descobriu do
+// server — para quando o cliente não chamou tools/list NELE. Visto no lab do
+// MidTS: o cliente listou só o mid-collector e cada chamada ao
+// midts-conhecimento saía como tool_inexistente. Sem descoberta do server,
+// devolve nada e tenta de novo na próxima chamada.
+func (c *correlator) serverTools(r *mcpRun, server string) []event.ToolSpec {
+	if r.servers[server] {
+		return nil
+	}
+	d := c.discovered[server]
+	if len(d) > 0 {
+		r.servers[server] = true
+	}
+	return d
 }
 
 // mcpSessionEnd fecha o run da sessão quando o cliente encerra (DELETE).

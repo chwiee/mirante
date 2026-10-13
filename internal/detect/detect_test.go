@@ -57,6 +57,32 @@ func TestToolCallSemToolsDeclaradasNaoAcusa(t *testing.T) {
 	}
 }
 
+// Lab do MidTS: o cliente listou só as tools do mid-collector e chamou
+// buscar_incidentes no midts-conhecimento. A lista do run não é daquele
+// server, então não prova nada; com a lista do server (descoberta), prova.
+func TestToolCallDeOutroServerSoContraListaDele(t *testing.T) {
+	collector := event.ToolSpec{Server: "mid-collector", Name: "list_collectors"}
+	s := &event.Step{Kind: "tool", Server: "midts-conhecimento", Tool: "buscar_incidentes", Args: json.RawMessage(`{}`)}
+	run := &event.Run{Tools: []event.ToolSpec{collector}, Steps: []*event.Step{s}}
+	if f := Default.ToolCall(run, s); len(f) != 0 {
+		t.Fatalf("sem lista do midts-conhecimento não dá pra acusar, veio %v", f)
+	}
+
+	run.Tools = append(run.Tools, event.ToolSpec{Server: "midts-conhecimento", Name: "buscar_incidentes"})
+	if f := Default.ToolCall(run, s); len(f) != 0 {
+		t.Fatalf("tool existe no server, veio %v", f)
+	}
+
+	s.Tool = "apagar_incidentes"
+	f := Default.ToolCall(run, s)
+	if codes(f) != "hallucination:tool_inexistente" {
+		t.Fatalf("tool inexistente no server, veio %q", codes(f))
+	}
+	if strings.Contains(f[0].Reason, "list_collectors") {
+		t.Fatalf("motivo deve citar só as tools do server chamado: %s", f[0].Reason)
+	}
+}
+
 func TestChamadaRepetida(t *testing.T) {
 	a := &event.Step{Kind: "tool", Tool: "search_knowledge", Args: json.RawMessage(`{"query":"x"}`)}
 	b := &event.Step{Kind: "tool", Tool: "search_knowledge", Args: json.RawMessage(`{ "query": "x" }`)}

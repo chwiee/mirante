@@ -110,3 +110,73 @@ func TestDicasDaDescoberta(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// mcpCom sobe um MCP server com as tools dadas (sem args, retorno vazio).
+func mcpCom(t *testing.T, tools ...string) *httptest.Server {
+	t.Helper()
+	s := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "0"}, nil)
+	for _, name := range tools {
+		mcp.AddTool(s, &mcp.Tool{Name: name}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
+			return nil, struct{}{}, nil
+		})
+	}
+	ts := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// Reproduz o lab do MidTS: o cliente chama tools/list só no mid-collector e
+// depois chama buscar_incidentes no midts-conhecimento, sem listar ali. Antes,
+// as 100 chamadas saíam como tool_inexistente ("não está entre as tools
+// disponíveis (list_collectors, ...)"). Agora as tools descobertas do
+// midts-conhecimento entram no run na 1ª chamada a ele.
+func TestClienteSemToolsListNoServerUsaDescoberta(t *testing.T) {
+	collector := mcpCom(t, "list_collectors", "get_queue_depth")
+	conhecimento := mcpCom(t, "buscar_incidentes", "registrar_licao")
+	r := newRig(t, Config{MCP: map[string]string{"mid-collector": collector.URL, "midts-conhecimento": conhecimento.URL}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.px.Discover(ctx, "midts-conhecimento", conhecimento.URL, "")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && len(topoDe(r, "midts-conhecimento")) < 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(topoDe(r, "midts-conhecimento")) < 2 {
+		t.Fatal("descoberta do midts-conhecimento não aconteceu")
+	}
+
+	connect := func(server string) *mcp.ClientSession {
+		cs, err := mcp.NewClient(&mcp.Implementation{Name: "midts", Version: "0"}, nil).
+			Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/midts/mcp/" + server}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cs
+	}
+	cs := connect("mid-collector")
+	if _, err := cs.ListTools(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs.Close()
+
+	cs = connect("midts-conhecimento") // sem ListTools de propósito
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "buscar_incidentes"}); err != nil {
+		t.Fatal(err)
+	}
+	cs.CallTool(ctx, &mcp.CallToolParams{Name: "apagar_incidentes"})
+	cs.Close()
+
+	run := r.waitRun(t, func(x *event.Run) bool { return x.Agent == "midts" && x.Status == "ok" && len(x.Steps) == 2 })
+	if f := run.Steps[0].Flags; len(f) != 0 {
+		t.Fatalf("buscar_incidentes existe no midts-conhecimento e virou alerta: %+v", f)
+	}
+	if f := run.Steps[1].Flags; len(f) == 0 || f[0].Code != "tool_inexistente" {
+		t.Fatalf("apagar_incidentes não existe no server e não foi sinalizada: %+v", f)
+	}
+	for _, e := range r.srv.Store.Topology() {
+		if e.Agent == "midts" && e.Tool == "buscar_incidentes" && !e.Declared {
+			t.Fatalf("tool real marcada como fantasma no mapa: %+v", e)
+		}
+	}
+}

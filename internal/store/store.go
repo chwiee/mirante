@@ -97,13 +97,20 @@ func (s *Store) Apply(e *event.Event) Update {
 			Server: e.Server, Tool: e.Tool, Args: e.Args, Rationale: e.Rationale, Confidence: e.Confidence,
 			Start: e.Time, Status: "running",
 		}
+		// tools do server anexadas na 1ª chamada a ele (cliente MCP que não
+		// chamou tools/list ali): passam a valer para checar este run.
+		for _, t := range e.Tools {
+			if !hasTool(run.Tools, t.Server, t.Name) {
+				run.Tools = append(run.Tools, t)
+			}
+		}
 		s.addStep(run, st)
 		st.Flags = s.det.ToolCall(run, st)
 		if k := (topoKey{run.Agent, e.Server, e.Tool}); !s.topo[k] {
 			// "fantasma" só quando havia uma lista de tools oferecidas e esta não
 			// estava nela. Sem lista (cliente MCP que não chamou tools/list, SDK
 			// sem tools no run_start) não dá para afirmar que é inventada.
-			s.topo[k] = !offered(run.Tools) || declaredIn(run.Tools, e.Server, e.Tool)
+			s.topo[k] = !offered(run.Tools, e.Server) || declaredIn(run.Tools, e.Server, e.Tool)
 		}
 
 	case event.ToolResult:
@@ -278,7 +285,25 @@ func (s *Store) Topology() []TopoEdge {
 	return out
 }
 
-func offered(tools []event.ToolSpec) bool { return len(tools) > 0 }
+// offered diz se o run tem lista de tools que vale para o server (spec sem
+// server, como as que vêm do LLM, vale para qualquer um).
+func offered(tools []event.ToolSpec, server string) bool {
+	for _, t := range tools {
+		if server == "" || t.Server == "" || t.Server == server {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTool(tools []event.ToolSpec, server, name string) bool {
+	for _, t := range tools {
+		if t.Server == server && t.Name == name {
+			return true
+		}
+	}
+	return false
+}
 
 func declaredIn(tools []event.ToolSpec, server, name string) bool {
 	for _, t := range tools {

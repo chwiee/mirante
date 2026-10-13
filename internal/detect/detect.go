@@ -68,12 +68,15 @@ func (c Config) Decision(s *event.Step) []event.Flag {
 func (c Config) ToolCall(run *event.Run, s *event.Step) []event.Flag {
 	var out []event.Flag
 
-	if len(run.Tools) > 0 {
-		spec := findTool(run.Tools, s.Server, s.Tool)
+	// Só afirma "inexistente" contra a lista DAQUELE server: um cliente MCP
+	// que listou as tools de um server e chama outro (sem tools/list nele e
+	// sem descoberta do mirante) não prova nada.
+	if avail := toolsFor(run.Tools, s.Server); len(avail) > 0 {
+		spec := findTool(avail, s.Server, s.Tool)
 		if spec == nil {
 			out = append(out, mk(event.LevelHallucination, "tool_inexistente",
 				"modelo chamou %q, que não está entre as %d tools disponíveis (%s)",
-				s.Tool, len(run.Tools), toolNames(run.Tools)))
+				s.Tool, len(avail), toolNames(avail)))
 		} else if len(spec.Schema) > 0 {
 			for _, p := range validate(spec.Schema, s.Args) {
 				out = append(out, mk(event.LevelHallucination, "args_invalidos", "%s", p))
@@ -173,6 +176,21 @@ func findTool(specs []event.ToolSpec, server, name string) *event.ToolSpec {
 		}
 	}
 	return nil
+}
+
+// toolsFor filtra as specs que valem para o server (spec sem server vale
+// para qualquer um; chamada sem server aceita todas).
+func toolsFor(specs []event.ToolSpec, server string) []event.ToolSpec {
+	if server == "" {
+		return specs
+	}
+	var out []event.ToolSpec
+	for _, t := range specs {
+		if t.Server == "" || t.Server == server {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func toolNames(specs []event.ToolSpec) string {

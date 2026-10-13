@@ -364,7 +364,7 @@ Roda no mirante, sobre o que ele observa. Funciona igual para qualquer modelo.
 
 | código | cor | quando |
 |---|---|---|
-| `tool_inexistente` | 🔴 | o modelo chamou uma tool que não foi oferecida a ele. Vira um **nó fantasma** tracejado no mapa |
+| `tool_inexistente` | 🔴 | o modelo chamou uma tool que não foi oferecida a ele. Vira um **nó fantasma** tracejado no mapa. Em runs só de MCP (sem LLM visível), a checagem é contra as tools **daquele server**: as que o cliente listou (`tools/list`) ou, se ele não listou ali, as que o mirante descobriu sozinho. Sem nenhuma das duas, não acusa |
 | `args_invalidos` | 🔴 | argumento obrigatório faltando, argumento inventado, tipo errado ou fora do `enum` |
 | `resposta_sem_base` | 🔴 | a resposta cita identificadores (pod, IP, versão, `512Mi`, nome entre crases) que não aparecem na pergunta nem nos retornos das tools |
 | `acao_nao_executada` | 🔴 | a resposta ou o raciocínio afirma uma ação ("registrei", "reiniciei", "aumentei o limit") e nenhuma tool capaz disso rodou com sucesso no run. **Visto ao vivo** com qwen2.5:7b |
