@@ -1,4 +1,4 @@
-# Integrar um agente ao mirante: HTTP direto (recomendado) ou SDK privado
+# Integrar um agente ao mirante: proxy, HTTP direto ou SDK Go
 
 O mirante enxerga um agente de três jeitos:
 
@@ -6,7 +6,7 @@ O mirante enxerga um agente de três jeitos:
 |---|---|---|
 | **Proxy** (`/p/<agente>/llm/...` e `/p/<agente>/mcp/...`) | chamadas ao LLM e às tools, sem mudar código | LLM sem assinatura (Ollama, OpenAI-compatible) e MCP |
 | **Eventos por HTTP direto** (`POST /v1/events`) | tudo que o agente quiser contar: pergunta, usuário, contexto, decisões, guardrails, resposta | **LLM assinado (Bedrock/SigV4)**, raciocínio interno, sinais próprios — e quando o mirante roda **no mesmo cluster** |
-| **SDK Go** (`github.com/chwiee/mirante/pkg/mirante`) | o mesmo que o HTTP direto, com buffer e lote prontos | agentes Go que **conseguem** baixar o módulo privado |
+| **SDK Go** (`github.com/chwiee/mirante/pkg/mirante`) | o mesmo que o HTTP direto, com buffer e lote prontos | agentes Go que preferem um cliente pronto |
 
 Proxy e eventos combinam: o MCP continua passando pelo proxy e os eventos contam o que o proxy
 não vê.
@@ -19,11 +19,8 @@ Com o mirante no cluster, o agente fala com ele pelo Service interno:
 http://mirante.observabilidade.svc.cluster.local:8080/v1/events
 ```
 
-Por que **não** importar o SDK:
+Por que HTTP direto é o caminho recomendado:
 
-- **Repositório privado:** importar o SDK obriga todo build do agente (máquina do dev, CI, imagem) a ter
-  credencial do GitHub para o repo do mirante. No GitHub da empresa (EMU) isso ainda passa por
-  política de tokens e IP allow list (seção 3). O HTTP direto não precisa de nada disso.
 - **Desacoplamento:** o agente não fica preso à versão do SDK; o contrato JSON é estável e pequeno.
 - **Qualquer linguagem:** o mesmo contrato serve para Go, Python, Node.
 - **Custo:** ~60 linhas de cliente dentro do próprio agente (exemplo na seção 1.3).
@@ -51,15 +48,15 @@ Exemplo de um run completo (um lote):
 
 ```json
 [
-  {"type":"run_start","run_id":"r-123","agent":"midts","time":"2026-10-13T12:00:00Z",
-   "user":"joana","input":"Os publishers do Rabbit de pagamentos travaram..."},
-  {"type":"decision","run_id":"r-123","span_id":"d1","agent":"midts","time":"2026-10-13T12:00:01Z",
+  {"type":"run_start","run_id":"r-123","agent":"meu-agente","time":"2026-10-13T12:00:00Z",
+   "user":"maria","input":"Os publishers do Rabbit de pagamentos travaram..."},
+  {"type":"decision","run_id":"r-123","span_id":"d1","agent":"meu-agente","time":"2026-10-13T12:00:01Z",
    "model":"qwen3-next-80b","chosen":["rabbitmq_api"],"tokens_in":5120,"tokens_out":80,"duration_ms":1400},
-  {"type":"tool_call","run_id":"r-123","span_id":"t1","parent_id":"d1","agent":"midts","time":"2026-10-13T12:00:01Z",
-   "server":"mid-collector","tool":"rabbitmq_api","args":{"consulta":"alarmes"}},
-  {"type":"tool_result","run_id":"r-123","span_id":"t1","agent":"midts","time":"2026-10-13T12:00:02Z",
+  {"type":"tool_call","run_id":"r-123","span_id":"t1","parent_id":"d1","agent":"meu-agente","time":"2026-10-13T12:00:01Z",
+   "server":"coletor-mcp","tool":"rabbitmq_api","args":{"consulta":"alarmes"}},
+  {"type":"tool_result","run_id":"r-123","span_id":"t1","agent":"meu-agente","time":"2026-10-13T12:00:02Z",
    "result":{"status":200},"duration_ms":150},
-  {"type":"run_end","run_id":"r-123","agent":"midts","time":"2026-10-13T12:00:05Z",
+  {"type":"run_end","run_id":"r-123","agent":"meu-agente","time":"2026-10-13T12:00:05Z",
    "output":"**Causa provável** ..."}
 ]
 ```
@@ -152,65 +149,20 @@ func (c *Cliente) enviar() {
 - Mantenha o painel e o `/v1/events` **só na rede interna** (sem Ingress público). Se precisar expor,
   use `--ingest-token`.
 
-## 2. Se mesmo assim quiser o SDK (módulo Go privado)
+## 2. SDK Go
 
-O SDK mora em `github.com/chwiee/mirante/pkg/mirante` (repositório privado). Para o `go` baixar um
-módulo privado:
+Para agentes em Go, o SDK traz o mesmo cliente pronto (buffer, lote, no-op com URL vazia):
 
 ```bash
-# 1) Não usar o proxy/checksum público para este caminho
-go env -w GOPRIVATE=github.com/chwiee/*
-
-# 2) Credencial para o git/HTTPS (token com leitura do repo)
-git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-#    ou ~/.netrc (o Go 1.24+ também usa o .netrc via GOAUTH=netrc):
-#    machine github.com login x-access-token password <TOKEN>
-
-# 3) Baixar
 go get github.com/chwiee/mirante@latest
 ```
 
-No build da imagem:
+```go
+import "github.com/chwiee/mirante/pkg/mirante"
 
-- **Imagem montada em Go (sem Docker, como no MidTS):** o `go build` roda na sua máquina/CI, então
-  basta o passo acima no ambiente que compila.
-- **Dockerfile:** use *secret* do BuildKit (o token não fica em camada nenhuma):
-  ```dockerfile
-  RUN --mount=type=secret,id=netrc,target=/root/.netrc \
-      GOPRIVATE=github.com/chwiee/* go mod download
-  ```
-  `docker buildx build --secret id=netrc,src=$HOME/.netrc ...`
-- **Sem acesso ao GitHub no build:** `go mod vendor` e versione a pasta `vendor/` no agente.
-- **Proxy corporativo de Go** (Artifactory/Nexus/Athens): cadastre o repo privado como remoto
-  autenticado e use `GOPROXY=https://<proxy>/go,direct` + `GONOSUMDB=github.com/chwiee/*`.
+mc := mirante.New(mirante.Config{URL: os.Getenv("MIRANTE_URL"), Agent: "meu-agente"}) // URL vazia = no-op
+defer mc.Close()
+```
 
-## 3. Repositório no GitHub da empresa com EMU (Enterprise Managed Users)
-
-No EMU as contas são criadas e controladas pelo provedor de identidade da empresa. Isso muda o jogo:
-
-1. **O repo precisa estar na organização da empresa.** Contas gerenciadas (`usuario_sufixo`) não
-   enxergam repositórios privados de contas pessoais (ex.: `github.com/chwiee/...`). Transfira ou
-   crie o mirante numa org da enterprise.
-2. **O caminho do módulo muda junto.** O `module` do `go.mod` precisa bater com o caminho do repo:
-   ```diff
-   - module github.com/chwiee/mirante
-   + module github.com/<org-da-empresa>/mirante
-   ```
-   e os imports internos também (`go mod edit -module ...` + trocar os imports). Sem isso, o `go get`
-   falha com *"module declares its path as ... but was required as ..."*.
-3. **Host com residência de dados (GHE.com):** se a enterprise estiver em `<empresa>.ghe.com`, o
-   módulo vira `<empresa>.ghe.com/<org>/mirante` e o `GOPRIVATE` precisa cobrir esse host
-   (`GOPRIVATE=<empresa>.ghe.com`). Coloque o token no `.netrc` para esse host: o `go` faz uma
-   requisição HTTPS de descoberta (`?go-get=1`) antes do `git clone`, e ela também precisa de credencial.
-4. **Tokens:** as políticas da enterprise/org podem bloquear PAT clássico, exigir aprovação de
-   *fine-grained PAT* ou limitar a validade. Para CI, prefira um **GitHub App** da org com permissão
-   `contents: read` no repo do mirante e gere o token na hora
-   (ex.: `actions/create-github-app-token`). O `GITHUB_TOKEN` padrão do Actions só lê o próprio repo.
-5. **IP allow list:** se a enterprise restringir IPs, os runners de CI e as máquinas que compilam
-   precisam estar na lista (runners self-hosted dentro da rede da empresa resolvem).
-6. **Proxy de Go corporativo:** em muitas empresas o `GOPROXY` aponta para o Artifactory/Nexus. Peça
-   ao time de plataforma para cadastrar o repo privado lá; assim nenhum build precisa de token próprio.
-
-> Resumo: com o mirante no cluster, **use o HTTP direto** e nada disso é necessário para os agentes.
-> As seções 2 e 3 só importam para quem quiser o SDK — ou para o build do **próprio** mirante, que
-> precisa do repo de qualquer forma.
+O SDK só depende da biblioteca padrão do Go. Ainda assim, se preferir não adicionar dependência ao
+agente, o cliente da seção 1.3 faz o mesmo em ~60 linhas.

@@ -1,5 +1,5 @@
-// Package demo gera tráfego sintético com as tools reais do ecossistema
-// (k8s-ts-mcp, knowledge-mcp, ce-k8s-mcp, rabbitmq-mcp) passando pelo SDK de
+// Package demo gera tráfego sintético com tools típicas de agentes de operação
+// (k8s-mcp, knowledge-mcp, logs-mcp, rabbitmq-mcp) passando pelo SDK de
 // verdade — serve pra ver o painel no telão antes de instrumentar os agentes,
 // e como teste de ponta a ponta do caminho SDK → HTTP → store → SSE.
 package demo
@@ -25,25 +25,25 @@ func obj(required []string, props map[string]any) map[string]any {
 var str = map[string]any{"type": "string"}
 
 // acts marca tools que executam ações (troubleshoot deleta pod, approve_action
-// aplica a mudança) — como o k8s-ts-mcp anotaria com readOnlyHint=false.
+// aplica a mudança) — como o k8s-mcp anotaria com readOnlyHint=false.
 var acts = false
 
 var (
 	k8s = []mirante.ToolSpec{
-		{Server: "k8s-ts-mcp", Name: "list_clusters", Schema: obj(nil, map[string]any{})},
-		{Server: "k8s-ts-mcp", Name: "scan_cluster", Schema: obj([]string{"cluster_id"}, map[string]any{"cluster_id": str})},
-		{Server: "k8s-ts-mcp", Name: "troubleshoot", ReadOnly: &acts, Schema: obj([]string{"cluster_id", "signal"}, map[string]any{"cluster_id": str, "signal": str, "namespace": str})},
-		{Server: "k8s-ts-mcp", Name: "approve_action", ReadOnly: &acts, Schema: obj([]string{"incident_id", "action_name"}, map[string]any{"incident_id": str, "action_name": str})},
-		{Server: "k8s-ts-mcp", Name: "get_postmortem", Schema: obj([]string{"incident_id"}, map[string]any{"incident_id": str})},
+		{Server: "k8s-mcp", Name: "list_clusters", Schema: obj(nil, map[string]any{})},
+		{Server: "k8s-mcp", Name: "scan_cluster", Schema: obj([]string{"cluster_id"}, map[string]any{"cluster_id": str})},
+		{Server: "k8s-mcp", Name: "troubleshoot", ReadOnly: &acts, Schema: obj([]string{"cluster_id", "signal"}, map[string]any{"cluster_id": str, "signal": str, "namespace": str})},
+		{Server: "k8s-mcp", Name: "approve_action", ReadOnly: &acts, Schema: obj([]string{"incident_id", "action_name"}, map[string]any{"incident_id": str, "action_name": str})},
+		{Server: "k8s-mcp", Name: "get_postmortem", Schema: obj([]string{"incident_id"}, map[string]any{"incident_id": str})},
 	}
 	know = []mirante.ToolSpec{
 		{Server: "knowledge-mcp", Name: "search_knowledge", Schema: obj([]string{"query"}, map[string]any{"query": str, "source_filter": str})},
 		{Server: "knowledge-mcp", Name: "record_lesson", Schema: obj([]string{"signal", "resolution"}, map[string]any{"signal": str, "context": str, "resolution": str, "outcome": str})},
 	}
-	ce = []mirante.ToolSpec{
-		{Server: "ce-k8s-mcp", Name: "logs", Schema: obj([]string{"cluster", "namespace"}, map[string]any{"cluster": str, "namespace": str, "pod": str, "tail": map[string]any{"type": "integer"}})},
-		{Server: "ce-k8s-mcp", Name: "status", Schema: obj([]string{"cluster", "namespace"}, map[string]any{"cluster": str, "namespace": str})},
-		{Server: "ce-k8s-mcp", Name: "events", Schema: obj([]string{"cluster", "namespace"}, map[string]any{"cluster": str, "namespace": str})},
+	logs = []mirante.ToolSpec{
+		{Server: "logs-mcp", Name: "logs", Schema: obj([]string{"cluster", "namespace"}, map[string]any{"cluster": str, "namespace": str, "pod": str, "tail": map[string]any{"type": "integer"}})},
+		{Server: "logs-mcp", Name: "status", Schema: obj([]string{"cluster", "namespace"}, map[string]any{"cluster": str, "namespace": str})},
+		{Server: "logs-mcp", Name: "events", Schema: obj([]string{"cluster", "namespace"}, map[string]any{"cluster": str, "namespace": str})},
 	}
 	rabbit = []mirante.ToolSpec{
 		{Server: "rabbitmq-mcp", Name: "queue_depth", Schema: obj([]string{"vhost", "queue"}, map[string]any{"vhost": str, "queue": str})},
@@ -69,9 +69,9 @@ type agent struct {
 // Run gera tráfego até ctx acabar.
 func Run(ctx context.Context, url string) {
 	agents := []*agent{
-		{name: "alfred", model: "claude-sonnet-5 (bedrock)", tools: cat(k8s, know, rabbit), llm: [2]int{700, 1800}},
-		{name: "wb-ce-agent", model: "qwen2.5:7b", tools: cat(k8s, know), llm: [2]int{900, 2600}},
-		{name: "ce-aut", model: "qwen2.5:7b", tools: ce, llm: [2]int{600, 1500}},
+		{name: "ops-bot", model: "claude-sonnet-5 (bedrock)", tools: cat(k8s, know, rabbit), llm: [2]int{700, 1800}},
+		{name: "suporte-bot", model: "qwen2.5:7b", tools: cat(k8s, know), llm: [2]int{900, 2600}},
+		{name: "triagem", model: "qwen2.5:7b", tools: logs, llm: [2]int{600, 1500}},
 	}
 	for _, a := range agents {
 		a.c = mirante.New(mirante.Config{URL: url, Agent: a.name})
@@ -94,16 +94,16 @@ func Run(ctx context.Context, url string) {
 		}
 	}
 	scenarios := []scenario{
-		{30, troubleshootOK, has("k8s-ts-mcp")},
-		{22, logsOK, has("ce-k8s-mcp")},
+		{30, troubleshootOK, has("k8s-mcp")},
+		{22, logsOK, has("logs-mcp")},
 		{10, rabbitOK, has("rabbitmq-mcp")},
-		{6, hallucinatedTool, has("k8s-ts-mcp")},
-		{6, invalidArgs, has("k8s-ts-mcp")},
-		{7, lowConfidence, has("ce-k8s-mcp")},
-		{6, ungroundedAnswer, has("k8s-ts-mcp")},
-		{5, errorThenConfident, has("ce-k8s-mcp")},
+		{6, hallucinatedTool, has("k8s-mcp")},
+		{6, invalidArgs, has("k8s-mcp")},
+		{7, lowConfidence, has("logs-mcp")},
+		{6, ungroundedAnswer, has("k8s-mcp")},
+		{5, errorThenConfident, has("logs-mcp")},
 		{4, loop, has("knowledge-mcp")},
-		{6, ambiguous, has("k8s-ts-mcp")},
+		{6, ambiguous, has("k8s-mcp")},
 	}
 
 	for {
@@ -133,7 +133,7 @@ func Run(ctx context.Context, url string) {
 
 // ---------- helpers ----------
 
-var clusters = []string{"eks-prd-pagamentos-01", "eks-prd-checkout-02", "eks-hml-core-01", "eks-prd-catalogo-03", "eks-prd-auth-01"}
+var clusters = []string{"prod-loja-01", "prod-checkout-02", "hml-core-01", "prod-catalogo-03", "prod-auth-01"}
 var namespaces = []string{"payments", "checkout", "catalog", "auth", "keda-system"}
 
 func pick[T any](xs []T) T { return xs[rand.IntN(len(xs))] }
@@ -162,7 +162,7 @@ func troubleshootOK(a *agent) {
 	pod := fmt.Sprintf("%s-api-%x", ns, rand.IntN(0xfffff))
 	inc := fmt.Sprintf("INC-%d", 4000+rand.IntN(999))
 	input := fmt.Sprintf("o %s no %s tá reiniciando sem parar, consegue ver?", ns, cl)
-	run := a.c.StartRunAs("joana.silva", input, a.tools)
+	run := a.c.StartRunAs("maria.exemplo", input, a.tools)
 
 	a.think(run, "Usuário relata restart em loop. Antes de diagnosticar do zero, consulto a base de lições pra ver se já vimos isso.",
 		[]string{"search_knowledge"}, hi(), mirante.Alternative{Tool: "troubleshoot", Score: mirante.Conf(0.55), Why: "diagnóstico direto, mas pode repetir trabalho já feito"})
@@ -171,7 +171,7 @@ func troubleshootOK(a *agent) {
 		map[string]any{"hits": 1, "top": map[string]any{"signal": "OOMKilled", "resolution": "aumentar limit de memória do deployment", "score": 0.71}}, nil)
 
 	a.think(run, "Há lição parecida (OOMKilled). Confirmo no cluster com troubleshoot antes de sugerir.", []string{"troubleshoot"}, hi())
-	a.call(run, "k8s-ts-mcp", "troubleshoot", map[string]any{"cluster_id": cl, "signal": "CrashLoopBackOff", "namespace": ns},
+	a.call(run, "k8s-mcp", "troubleshoot", map[string]any{"cluster_id": cl, "signal": "CrashLoopBackOff", "namespace": ns},
 		"Confirmar a causa real no cluster informado pelo usuário.", hi(), [2]int{1200, 4200},
 		map[string]any{"incident_id": inc, "cluster_id": cl, "pod": pod, "cause": "OOMKilled", "memory_limit": "256Mi",
 			"proposed": []string{"delete pod (safe, executado)", "raise memory limit 256Mi→384Mi (high, requer approve_action)"}}, nil)
@@ -186,11 +186,11 @@ func troubleshootOK(a *agent) {
 
 func logsOK(a *agent) {
 	cl, ns := pick(clusters), pick(namespaces)
-	run := a.c.StartRunAs("rafael.costa", fmt.Sprintf("me mostra o status do %s no %s", ns, cl), a.tools)
-	a.think(run, "Pedido explícito de status; tool status do ce-k8s-mcp responde direto.", []string{"status"}, hi(),
+	run := a.c.StartRunAs("joao.exemplo", fmt.Sprintf("me mostra o status do %s no %s", ns, cl), a.tools)
+	a.think(run, "Pedido explícito de status; tool status do logs-mcp responde direto.", []string{"status"}, hi(),
 		mirante.Alternative{Tool: "events", Score: mirante.Conf(0.3), Why: "eventos não dão o estado atual dos pods"})
 	ready := 2 + rand.IntN(4)
-	a.call(run, "ce-k8s-mcp", "status", map[string]any{"cluster": cl, "namespace": ns}, "Status atual dos pods no namespace pedido.", hi(), [2]int{150, 700},
+	a.call(run, "logs-mcp", "status", map[string]any{"cluster": cl, "namespace": ns}, "Status atual dos pods no namespace pedido.", hi(), [2]int{150, 700},
 		map[string]any{"pods": ready, "ready": ready, "restarts_24h": 0}, nil)
 	a.think(run, "Tudo pronto, respondo.", nil, hi())
 	run.End(fmt.Sprintf("%s no %s: %d/%d pods Ready, nenhum restart nas últimas 24h.", ns, cl, ready, ready), nil)
@@ -214,9 +214,9 @@ func rabbitOK(a *agent) {
 
 func hallucinatedTool(a *agent) {
 	cl := pick(clusters)
-	run := a.c.StartRunAs("joana.silva", "reinicia o "+cl+" inteiro pra mim", a.tools)
+	run := a.c.StartRunAs("maria.exemplo", "reinicia o "+cl+" inteiro pra mim", a.tools)
 	a.think(run, "Usuário quer reiniciar o cluster. Vou usar restart_cluster.", []string{"restart_cluster"}, 0.82)
-	a.call(run, "k8s-ts-mcp", "restart_cluster", map[string]any{"cluster_id": cl}, "Reiniciar o cluster pedido.", 0.82, [2]int{20, 60},
+	a.call(run, "k8s-mcp", "restart_cluster", map[string]any{"cluster_id": cl}, "Reiniciar o cluster pedido.", 0.82, [2]int{20, 60},
 		nil, errors.New(`ferramenta "restart_cluster" não existe`))
 	a.think(run, "Ferramenta não existe; explico ao usuário.", nil, 0.7)
 	run.End("Não tenho uma ferramenta para reiniciar o cluster inteiro — posso rodar scan_cluster ou troubleshoot num sinal específico. Deu erro ao tentar.", nil)
@@ -224,12 +224,12 @@ func hallucinatedTool(a *agent) {
 
 func invalidArgs(a *agent) {
 	cl := pick(clusters)
-	run := a.c.StartRunAs("rafael.costa", "faz um scan no "+cl, a.tools)
+	run := a.c.StartRunAs("joao.exemplo", "faz um scan no "+cl, a.tools)
 	a.think(run, "Scan pedido explicitamente.", []string{"scan_cluster"}, 0.9)
-	a.call(run, "k8s-ts-mcp", "scan_cluster", map[string]any{"cluster": cl, "deep": true}, "Scan completo do cluster.", 0.9, [2]int{30, 90},
+	a.call(run, "k8s-mcp", "scan_cluster", map[string]any{"cluster": cl, "deep": true}, "Scan completo do cluster.", 0.9, [2]int{30, 90},
 		nil, errors.New("cluster_id é obrigatório"))
 	a.think(run, "Corrijo o nome do argumento e tento de novo.", []string{"scan_cluster"}, 0.88)
-	a.call(run, "k8s-ts-mcp", "scan_cluster", map[string]any{"cluster_id": cl}, "Scan com o argumento correto.", 0.88, [2]int{900, 3000},
+	a.call(run, "k8s-mcp", "scan_cluster", map[string]any{"cluster_id": cl}, "Scan com o argumento correto.", 0.88, [2]int{900, 3000},
 		map[string]any{"cluster_id": cl, "findings": 2, "signals": []string{"KEDAScaledObjectStuck", "ImagePullBackOff"}}, nil)
 	a.think(run, "Respondo.", nil, 0.9)
 	run.End(fmt.Sprintf("Scan do %s: 2 achados — KEDAScaledObjectStuck e ImagePullBackOff. Quer que eu rode troubleshoot em algum?", cl), nil)
@@ -240,7 +240,7 @@ func lowConfidence(a *agent) {
 	run := a.c.StartRunAs("time-sre", "tá lento o "+ns+", o que pode ser?", a.tools)
 	a.think(run, "\"Lento\" é vago. Talvez eventos mostrem algo, mas não tenho certeza de que é a ferramenta certa.",
 		[]string{"events"}, 0.38, mirante.Alternative{Tool: "logs", Score: mirante.Conf(0.35), Why: "logs podem ter latência, mas não sei qual pod"})
-	a.call(run, "ce-k8s-mcp", "events", map[string]any{"cluster": cl, "namespace": ns}, "Talvez haja eventos de throttling ou HPA.", 0.38, [2]int{200, 800},
+	a.call(run, "logs-mcp", "events", map[string]any{"cluster": cl, "namespace": ns}, "Talvez haja eventos de throttling ou HPA.", 0.38, [2]int{200, 800},
 		map[string]any{"events": []string{"Normal Scheduled", "Normal Pulled"}}, nil)
 	a.think(run, "Nada conclusivo.", nil, 0.4)
 	run.End("Não encontrei eventos anormais no "+ns+". Lentidão pode estar fora do Kubernetes — vale olhar APM/banco.", nil)
@@ -248,9 +248,9 @@ func lowConfidence(a *agent) {
 
 func ungroundedAnswer(a *agent) {
 	cl := pick(clusters)
-	run := a.c.StartRunAs("joana.silva", "quais problemas tem no "+cl+"?", a.tools)
+	run := a.c.StartRunAs("maria.exemplo", "quais problemas tem no "+cl+"?", a.tools)
 	a.think(run, "Scan do cluster responde isso.", []string{"scan_cluster"}, 0.92)
-	a.call(run, "k8s-ts-mcp", "scan_cluster", map[string]any{"cluster_id": cl}, "Listar sinais ativos.", 0.92, [2]int{900, 3000},
+	a.call(run, "k8s-mcp", "scan_cluster", map[string]any{"cluster_id": cl}, "Listar sinais ativos.", 0.92, [2]int{900, 3000},
 		map[string]any{"cluster_id": cl, "findings": 1, "signals": []string{"ImagePullBackOff"}, "pod": "catalog-web-6c9d8"}, nil)
 	a.think(run, "Respondo.", nil, 0.9)
 	// "payments-worker-77f4b" e "ip-10-42-3-17" não vieram de lugar nenhum.
@@ -259,9 +259,9 @@ func ungroundedAnswer(a *agent) {
 
 func errorThenConfident(a *agent) {
 	cl, ns := pick(clusters), pick(namespaces)
-	run := a.c.StartRunAs("rafael.costa", "tem erro nos logs do "+ns+"?", a.tools)
+	run := a.c.StartRunAs("joao.exemplo", "tem erro nos logs do "+ns+"?", a.tools)
 	a.think(run, "Pedido de logs.", []string{"logs"}, 0.9)
-	a.call(run, "ce-k8s-mcp", "logs", map[string]any{"cluster": cl, "namespace": ns, "tail": 200}, "Ler logs recentes.", 0.9, [2]int{3000, 5000},
+	a.call(run, "logs-mcp", "logs", map[string]any{"cluster": cl, "namespace": ns, "tail": 200}, "Ler logs recentes.", 0.9, [2]int{3000, 5000},
 		nil, errors.New("context deadline exceeded"))
 	a.think(run, "Respondo.", nil, 0.85)
 	run.End("Os logs do "+ns+" estão limpos, sem nada fora do normal.", nil)
@@ -281,10 +281,10 @@ func loop(a *agent) {
 func ambiguous(a *agent) {
 	cl := pick(clusters)
 	inc := fmt.Sprintf("INC-%d", 4000+rand.IntN(999))
-	run := a.c.StartRunAs("joana.silva", "o que aconteceu no "+inc+"?", a.tools)
+	run := a.c.StartRunAs("maria.exemplo", "o que aconteceu no "+inc+"?", a.tools)
 	a.think(run, "Pode ser pedido de postmortem ou de novo diagnóstico — ambos fazem sentido.", []string{"get_postmortem"}, 0.58,
 		mirante.Alternative{Tool: "troubleshoot", Score: mirante.Conf(0.54), Why: "talvez o usuário queira re-diagnosticar"})
-	a.call(run, "k8s-ts-mcp", "get_postmortem", map[string]any{"incident_id": inc}, "Incidente citado pelo ID → postmortem.", 0.58, [2]int{100, 500},
+	a.call(run, "k8s-mcp", "get_postmortem", map[string]any{"incident_id": inc}, "Incidente citado pelo ID → postmortem.", 0.58, [2]int{100, 500},
 		map[string]any{"incident_id": inc, "cluster_id": cl, "summary": "OOMKilled em checkout-api, limit ajustado 256Mi→384Mi"}, nil)
 	a.think(run, "Respondo.", nil, 0.7)
 	run.End(fmt.Sprintf("%s (%s): OOMKilled em checkout-api, limit ajustado 256Mi→384Mi.", inc, cl), nil)

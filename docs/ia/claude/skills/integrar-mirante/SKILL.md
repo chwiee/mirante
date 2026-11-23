@@ -53,7 +53,7 @@ Anote para cada destino: **o cliente usado**, **a variável/campo de config** e 
 
 Faça o modo A sempre que possível. Os modos B/C só valem se o usuário quiser o que o proxy não vê, ou se o proxy não for possível. Diga isso ao usuário.
 
-**Se o destino do agente não estiver entre os upstreams configurados no mirante**, não invente um nome. Pare e diga ao usuário exatamente o que o operador do mirante precisa adicionar, por exemplo `--llm ollama=http://ollama.ce.svc:11434` ou `--mcp k8s-ts-mcp=http://k8s-ts-mcp:8443` (ou, no Kubernetes, as variáveis `MIRANTE_LLM`/`MIRANTE_MCP` do ConfigMap). Depois continue o resto.
+**Se o destino do agente não estiver entre os upstreams configurados no mirante**, não invente um nome. Pare e diga ao usuário exatamente o que o operador do mirante precisa adicionar, por exemplo `--llm ollama=http://ollama.ia.svc:11434` ou `--mcp k8s-mcp=http://k8s-mcp:8443` (ou, no Kubernetes, as variáveis `MIRANTE_LLM`/`MIRANTE_MCP` do ConfigMap). Depois continue o resto.
 
 ## Passo 3A — Modo proxy (só configuração)
 
@@ -65,7 +65,7 @@ MCP:  http://mirante.observabilidade:8080/p/<agente>/mcp/<upstream><resto>
 ```
 
 - `<agente>`: nome do agente no painel, em kebab-case (sugira o nome do repositório e confirme com o usuário).
-- `<upstream>`: o nome configurado no mirante cujo destino corresponde ao destino atual do agente. O mesmo serviço pode aparecer com hosts diferentes (`ollama`, `ollama.ce.svc`, `ollama.ce.svc.cluster.local`). Se não tiver certeza de que é o mesmo destino (mesmo host, porta e ambiente), pergunte ao usuário, porque apontar para o upstream errado faz o agente falar com outro serviço.
+- `<upstream>`: o nome configurado no mirante cujo destino corresponde ao destino atual do agente. O mesmo serviço pode aparecer com hosts diferentes (`ollama`, `ollama.ia.svc`, `ollama.ia.svc.cluster.local`). Se não tiver certeza de que é o mesmo destino (mesmo host, porta e ambiente), pergunte ao usuário, porque apontar para o upstream errado faz o agente falar com outro serviço.
 - `<resto>`: **o que sobra da URL atual depois de tirar o destino do upstream.** O mirante concatena `destino do upstream + resto`.
 
 Exemplos, supondo o upstream `ollama → http://ollama:11434`:
@@ -78,7 +78,7 @@ Exemplos, supondo o upstream `ollama → http://ollama:11434`:
 
 Se o upstream fosse `openai → https://api.openai.com/v1` (com `/v1` já incluído), o cliente OpenAI usaria `http://mirante.observabilidade:8080/p/<agente>/llm/openai`, sem repetir o `/v1`.
 
-Para MCP, com o upstream `k8s-ts-mcp → http://hub:8443/mcp`: a URL atual `http://hub:8443/mcp` vira `http://mirante.observabilidade:8080/p/<agente>/mcp/k8s-ts-mcp`.
+Para MCP, com o upstream `k8s-mcp → http://hub:8443/mcp`: a URL atual `http://hub:8443/mcp` vira `http://mirante.observabilidade:8080/p/<agente>/mcp/k8s-mcp`.
 
 ### Onde mudar
 
@@ -113,7 +113,7 @@ span.End(resultado, err)
 run.End(resposta, errFinal)
 ```
 
-Exige acesso ao módulo privado `github.com/chwiee/mirante` (`GOPRIVATE=github.com/chwiee/*`). Se não houver, use o modo C com o contrato abaixo.
+Instale com `go get github.com/chwiee/mirante@latest` (só depende da biblioteca padrão). Se o agente não puder ganhar dependência nova, use o modo C com o contrato abaixo.
 
 ## Passo 3C — Modo HTTP (Python, TypeScript ou qualquer linguagem)
 
@@ -145,9 +145,9 @@ Manda eventos para POST /v1/events. Regras:
 
 Uso:
     m = Mirante(os.getenv("MIRANTE_URL"), agent="meu-agente")
-    run = m.start_run(pergunta, tools=[{"server": "k8s-ts-mcp", "name": "scan_cluster", "schema": {...}}])
+    run = m.start_run(pergunta, tools=[{"server": "k8s-mcp", "name": "scan_cluster", "schema": {...}}])
     run.decision(model="gpt-4o", reasoning=texto, chosen=["scan_cluster"], duration_ms=812)
-    span = run.tool_call("k8s-ts-mcp", "scan_cluster", {"cluster_id": "x"}, rationale="...")
+    span = run.tool_call("k8s-mcp", "scan_cluster", {"cluster_id": "x"}, rationale="...")
     span.end(result=resultado)            # ou span.end(error=exc)
     run.end(resposta)                     # ou run.end(error=exc)
     m.close()                             # no shutdown: envia o que falta
@@ -297,9 +297,9 @@ class ToolSpan:
 //
 // Uso:
 //   const m = new Mirante(process.env.MIRANTE_URL, "meu-agente");
-//   const run = m.startRun(pergunta, [{ server: "k8s-ts-mcp", name: "scan_cluster", schema: {...} }]);
+//   const run = m.startRun(pergunta, [{ server: "k8s-mcp", name: "scan_cluster", schema: {...} }]);
 //   run.decision({ model: "gpt-4o", reasoning: texto, chosen: ["scan_cluster"], durationMs: 812 });
-//   const span = run.toolCall("k8s-ts-mcp", "scan_cluster", { cluster_id: "x" }, "porque...");
+//   const span = run.toolCall("k8s-mcp", "scan_cluster", { cluster_id: "x" }, "porque...");
 //   span.end(resultado);                 // ou span.end(undefined, erro)
 //   run.end(resposta);                   // ou run.end("", erro)
 //   await m.close();                     // no shutdown: envia o que falta

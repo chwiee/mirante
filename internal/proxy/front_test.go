@@ -14,7 +14,7 @@ import (
 	"github.com/chwiee/mirante/internal/event"
 )
 
-// MCP real servido em /mcp (como o ce-k8s-mcp), com /healthz próprio.
+// MCP real servido em /mcp (como o logs-mcp), com /healthz próprio.
 func mcpEmMCP(t *testing.T) *httptest.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "eco", Version: "0"}, nil)
 	mcp.AddTool(s, &mcp.Tool{Name: "scan_cluster"}, func(_ context.Context, _ *mcp.CallToolRequest, in scanIn) (*mcp.CallToolResult, scanOut, error) {

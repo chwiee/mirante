@@ -1,4 +1,4 @@
-# Exemplo: wb-ce-agent com o mirante como SIDECAR.
+# Exemplo: suporte-bot com o mirante como SIDECAR.
 #
 # O sidecar só faz proxy (sem UI) e manda os eventos, em lote e de forma
 # assíncrona, para o mirante central. Se o central cair, o sidecar descarta
@@ -9,32 +9,32 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: wb-ce-agent
-  namespace: ce
+  name: suporte-bot
+  namespace: ia
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: wb-ce-agent }
+    matchLabels: { app: suporte-bot }
   template:
     metadata:
-      labels: { app: wb-ce-agent }
+      labels: { app: suporte-bot }
     spec:
       containers:
-        - name: wb-ce-agent
-          image: REGISTRY/wb-ce-agent:latest   # sem nenhuma mudança de código
+        - name: suporte-bot
+          image: REGISTRY/suporte-bot:latest   # sem nenhuma mudança de código
           env:
-            # antes: http://ollama.ce.svc:11434
-            - { name: OLLAMA_URL, value: "http://localhost:8081/p/wb-ce-agent/llm/ollama" }
-            # antes: k8s-ts-mcp=http://k8s-ts-mcp.k8s-ts.svc:8443
-            - { name: MCP_SERVERS, value: "k8s-ts-mcp=http://localhost:8081/p/wb-ce-agent/mcp/k8s-ts-mcp" }
+            # antes: http://ollama.ia.svc:11434
+            - { name: OLLAMA_URL, value: "http://localhost:8081/p/suporte-bot/llm/ollama" }
+            # antes: k8s-mcp=http://k8s-mcp.mcp.svc:8443
+            - { name: MCP_SERVERS, value: "k8s-mcp=http://localhost:8081/p/suporte-bot/mcp/k8s-mcp" }
 
         - name: mirante
-          image: REGISTRY/mirante:0.1.0
+          image: ghcr.io/chwiee/mirante:v0.1.0
           args:
             - --addr=:8081
             - --events-url=http://mirante.observabilidade:8080
-            - --llm=ollama=http://ollama.ce.svc:11434
-            - --mcp=k8s-ts-mcp=http://k8s-ts-mcp.k8s-ts.svc:8443
+            - --llm=ollama=http://ollama.ia.svc:11434
+            - --mcp=k8s-mcp=http://k8s-mcp.mcp.svc:8443
             - --inject-reasoning
           ports:
             - { name: proxy, containerPort: 8081 }

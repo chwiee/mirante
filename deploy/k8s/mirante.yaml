@@ -21,10 +21,10 @@ data:
   # nome=url, separados por vírgula. O nome é o que vai na URL do agente:
   #   http://mirante.observabilidade:8080/p/<agente>/llm/<nome>
   #   http://mirante.observabilidade:8080/p/<agente>/mcp/<nome>
-  MIRANTE_LLM: "ollama=http://ollama.ce.svc:11434"
+  MIRANTE_LLM: "ollama=http://ollama.ia.svc:11434"
   # MCPs com várias réplicas: aponte para o Service HEADLESS (afinidade de
   # sessão MCP) — ver deploy/k8s/mirante-na-frente-do-mcp.yaml.
-  MIRANTE_MCP: "k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc.cluster.local:8443,ce-k8s-mcp=http://ce-k8s-mcp-headless.ce.svc.cluster.local:8080/mcp,knowledge-mcp=http://knowledge-mcp.ce.svc:8444"
+  MIRANTE_MCP: "k8s-mcp=http://k8s-mcp-headless.mcp.svc.cluster.local:8443,logs-mcp=http://logs-mcp-headless.ia.svc.cluster.local:8080/mcp,knowledge-mcp=http://knowledge-mcp.ia.svc:8444"
   MIRANTE_INJECT_REASONING: "true"
   # tools que executam ações mesmo sem o nome dizer (evita falso "acao_nao_executada")
   MIRANTE_ACTION_TOOLS: "troubleshoot,approve_action,run_automation"
@@ -49,7 +49,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: mirante
-          image: REGISTRY/mirante:0.1.0   # ajuste
+          image: ghcr.io/chwiee/mirante:v0.1.0   # ajuste
           args: ["--addr", ":8080"]
           envFrom:
             - configMapRef: { name: mirante }

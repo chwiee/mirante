@@ -49,7 +49,7 @@ Com os dois proxies juntos, o mirante liga tudo no mesmo run. Com só o MCP, cad
 go build -o mirante ./cmd/mirante
 ./mirante --addr :8080 \
   --llm ollama=http://localhost:11434 \
-  --mcp k8s-ts-mcp=http://localhost:8443 \
+  --mcp k8s-mcp=http://localhost:8443 \
   --mcp knowledge-mcp=http://localhost:8444 \
   --inject-reasoning \
   --action-tools troubleshoot,approve_action
@@ -100,33 +100,33 @@ MCP:  http://<mirante>/p/<nome-do-agente>/mcp/<nome-do-server>
 
 Tudo o que vem depois é repassado igual. O caminho (`/api/chat`, `/v1/chat/completions`, `/api/tags`…), a query string e os headers (inclusive `Authorization` e `Mcp-Session-Id`) chegam intactos ao upstream. A única exceção é o `Accept-Encoding`, removido nas requisições observadas para a resposta vir sem compressão e poder ser lida.
 
-### 4.1 wb-ce-agent (Ollama + MCP)
+### 4.1 Agente com Ollama + MCP (ex: `suporte-bot`)
 
 ```diff
 - OLLAMA_URL=http://ollama:11434
-+ OLLAMA_URL=http://mirante:8080/p/wb-ce-agent/llm/ollama
-- MCP_SERVERS=k8s-ts-mcp=http://k8s-ts-mcp:8443
-+ MCP_SERVERS=k8s-ts-mcp=http://mirante:8080/p/wb-ce-agent/mcp/k8s-ts-mcp
++ OLLAMA_URL=http://mirante:8080/p/suporte-bot/llm/ollama
+- MCP_SERVERS=k8s-mcp=http://k8s-mcp:8443
++ MCP_SERVERS=k8s-mcp=http://mirante:8080/p/suporte-bot/mcp/k8s-mcp
 ```
 
-### 4.2 ce aut (OpenAI-compatible)
+### 4.2 Agente OpenAI-compatible (vLLM, LM Studio, LiteLLM, Ollama `/v1`…; ex: `triagem`)
 
 ```diff
-- CE_LLM_URL=http://ollama.ce.svc:11434/v1
-+ CE_LLM_URL=http://mirante:8080/p/ce-aut/llm/ollama/v1
-- CE_K8S_MCP_URL=http://ce-k8s-mcp:8080/mcp
-+ CE_K8S_MCP_URL=http://mirante:8080/p/ce-aut/mcp/ce-k8s-mcp
+- LLM_URL=http://ollama.ia.svc:11434/v1
++ LLM_URL=http://mirante:8080/p/triagem/llm/ollama/v1
+- LOGS_MCP_URL=http://logs-mcp:8080/mcp
++ LOGS_MCP_URL=http://mirante:8080/p/triagem/mcp/logs-mcp
 ```
 
-O `/v1` continua no fim da URL do LLM: o mirante só troca o host. O `CE_LLM_API_KEY` e o `CE_K8S_MCP_TOKEN` seguem no header até o destino. O mirante não os guarda nem os exibe.
+O `/v1` continua no fim da URL do LLM: o mirante só troca o host. A chave da API do LLM e o token do MCP seguem no header até o destino. O mirante não os guarda nem os exibe.
 
-### 4.3 Alfred (Bedrock + MCP)
+### 4.3 Agente no Bedrock + MCP (ex: `ops-bot`)
 
 Só a URL dos MCP servers:
 
 ```diff
-- k8s-ts-mcp: http://k8s-ts-mcp:8443
-+ k8s-ts-mcp: http://mirante:8080/p/alfred/mcp/k8s-ts-mcp
+- k8s-mcp: http://k8s-mcp:8443
++ k8s-mcp: http://mirante:8080/p/ops-bot/mcp/k8s-mcp
 ```
 
 Para ver também as decisões do Claude (incluindo o *thinking*), instrumente com o SDK (seção 10). Os dois modos convivem no mesmo painel.
@@ -193,7 +193,7 @@ Validação manual com um agente real:
 
 ## 6. Mirante na frente de um MCP que já roda no Kubernetes
 
-O cenário: um MCP server (ex: o hub-server do k8s-ts-mcp ou o ce-k8s-mcp) já roda 100% no cluster, e você quer os dados e as métricas dele no painel. Há dois casos:
+O cenário: um MCP server (ex: o k8s-mcp do k8s-mcp ou o logs-mcp) já roda 100% no cluster, e você quer os dados e as métricas dele no painel. Há dois casos:
 
 - **Você não tem agente próprio**, e o MCP é usado por clientes que você não controla (Claude Code, Kiro, outros times): use o **modo front** (6.1). **Os clientes não mudam nada.**
 - **Os clientes são seus** e podem trocar a URL: basta o proxy com o nome do agente na URL (6.2 em diante).
@@ -235,7 +235,7 @@ Como ler esses números:
 **O MCP aparece no mapa já ao subir.** O mirante se conecta ao MCP como cliente, lista as tools e mostra server e tools ("sem chamadas") antes de qualquer cliente passar, repetindo a cada 5 minutos para acompanhar tools novas. Essa sessão de descoberta não vira run no painel.
 
 - **Caminho:** se a URL do `--front` (ou do `--mcp`) trouxer o caminho do MCP (ex: `http://host:9000/mcp`), ele é usado. Se não trouxer, o mirante tenta `/` e depois `/mcp`.
-- **Token:** se o MCP exige `Authorization`, informe um token **só para a descoberta**, por variável de ambiente (não por flag, para não aparecer na lista de processos): `MIRANTE_MCP_TOKEN="ce-k8s-mcp=<token>"`. Os clientes continuam mandando o próprio token, que o mirante só repassa.
+- **Token:** se o MCP exige `Authorization`, informe um token **só para a descoberta**, por variável de ambiente (não por flag, para não aparecer na lista de processos): `MIRANTE_MCP_TOKEN="logs-mcp=<token>"`. Os clientes continuam mandando o próprio token, que o mirante só repassa.
 - **Se não aparecer**, o log do mirante diz por quê e o que fazer, ex: `descoberta do MCP falhou … dica="o MCP exige token: defina MIRANTE_MCP_TOKEN=…"`. O MCP ainda aparece assim que um cliente passar.
 
 #### Testar na sua máquina, com port-forward do EKS
@@ -243,20 +243,20 @@ Como ler esses números:
 Três terminais. O mirante fica entre o cliente e o MCP:
 
 ```bash
-kubectl -n ce port-forward svc/ce-k8s-mcp 9000:80
+kubectl -n ia port-forward svc/logs-mcp 9000:80
 ```
 
 ```bash
-MIRANTE_MCP_TOKEN="ce-k8s-mcp=<token>" go run ./cmd/mirante --front ce-k8s-mcp=http://localhost:9000 --front-addr :8081
+MIRANTE_MCP_TOKEN="logs-mcp=<token>" go run ./cmd/mirante --front logs-mcp=http://localhost:9000 --front-addr :8081
 ```
 
-Abra http://localhost:8080. O `ce-k8s-mcp` e as tools dele aparecem em segundos. Depois, faça um cliente chamar `http://localhost:8081/mcp` em vez de `http://localhost:9000/mcp`. Só a porta muda. Por exemplo, a ferramenta de diagnóstico:
+Abra http://localhost:8080. O `logs-mcp` e as tools dele aparecem em segundos. Depois, faça um cliente chamar `http://localhost:8081/mcp` em vez de `http://localhost:9000/mcp`. Só a porta muda. Por exemplo, a ferramenta de diagnóstico:
 
 ```bash
 MCP_BEARER_TOKEN=<token> go run ./examples/mcp-sessoes http://localhost:8081/mcp 3
 ```
 
-Ou o Claude Code (`claude mcp add --transport http ce-k8s-mcp-mirante http://localhost:8081/mcp --header "Authorization: Bearer <token>"`). O cliente aparece no mapa ligado ao MCP, e cada chamada mostra argumentos, retorno e tempo.
+Ou o Claude Code (`claude mcp add --transport http logs-mcp-mirante http://localhost:8081/mcp --header "Authorization: Bearer <token>"`). O cliente aparece no mapa ligado ao MCP, e cada chamada mostra argumentos, retorno e tempo.
 
 > O port-forward liga a **um pod só**, então o problema de sessão com várias réplicas (6.2) não aparece nesse teste.
 
@@ -273,7 +273,7 @@ Medido num cluster kind com um MCP stateful de 2 réplicas, usando o cliente ofi
 | cliente → Service do MCP (como é hoje) | **13%** (100 sessões); **17%** matando um pod no meio (300 sessões) |
 | cliente → mirante → Service headless | **0%**; matando um pod, **1** em 300 (a sessão que estava em andamento no pod morto) |
 
-> **Cookie de sticky session no ALB não resolve para clientes Go:** o cliente MCP do go-sdk usa `http.DefaultClient`, que não guarda cookies. Então a afinidade por cookie no Ingress não vale para wb-ce-agent, ce CLI e outros clientes Go. A afinidade no mirante não depende do cliente.
+> **Cookie de sticky session no ALB não resolve para clientes Go:** o cliente MCP do go-sdk usa `http.DefaultClient`, que não guarda cookies. Então a afinidade por cookie no Ingress não vale para clientes Go. A afinidade no mirante não depende do cliente.
 
 ### 6.3 Passo a passo (headless + afinidade)
 
@@ -281,27 +281,27 @@ Medido num cluster kind com um MCP stateful de 2 réplicas, usando o cliente ofi
 
 ```bash
 docker build --build-arg CMD=./examples/mcp-sessoes -t <registry>/mcp-sessoes:1 . && docker push <registry>/mcp-sessoes:1
-kubectl -n k8s-ts-mcp run diag --rm -it --restart=Never --image=<registry>/mcp-sessoes:1 -- http://hub-server-mcp.k8s-ts-mcp.svc:8443 30
+kubectl -n mcp run diag --rm -it --restart=Never --image=<registry>/mcp-sessoes:1 -- http://k8s-mcp.mcp.svc:8443 30
 # MCP com token: acrescente  --env=MCP_BEARER_TOKEN=...
 ```
 
-Saída com `sessoes_falhas` > 0 e `session not found` = o problema existe hoje, com ou sem mirante. Se o erro for de **conexão** (timeout, `connection refused`), não é o problema de sessão: é a NetworkPolicy do MCP bloqueando a porta. É o caso do hub-server, cuja policy só libera a `:7443`. Nesse caso, pule para o passo 2.
+Saída com `sessoes_falhas` > 0 e `session not found` = o problema existe hoje, com ou sem mirante. Se o erro for de **conexão** (timeout, `connection refused`), não é o problema de sessão: é a NetworkPolicy do MCP bloqueando a porta. É o caso do k8s-mcp, cuja policy só libera a `:7443`. Nesse caso, pule para o passo 2.
 
-**2. Crie o Service headless** (e, se o MCP já tiver NetworkPolicy, a regra que libera o mirante). Exemplos prontos para o hub-server e o ce-k8s-mcp:
+**2. Crie o Service headless** (e, se o MCP já tiver NetworkPolicy, a regra que libera o mirante). Exemplos prontos para o k8s-mcp e o logs-mcp:
 
 ```bash
 kubectl apply -f deploy/k8s/mirante-na-frente-do-mcp.yaml
 ```
 
 > **NetworkPolicy, cuidado nos dois sentidos:**
-> - O hub-server **já** é isolado: a policy dele só libera a `:7443`, o que bloqueia a `:8443` para todo o resto. Sem a regra `hub-server-mcp-from-mirante`, o mirante não conecta. Validado em kind: sem a regra, bloqueado; com ela, conecta; outro pod sem o label `app: mirante`, continua bloqueado.
-> - Num MCP **sem** NetworkPolicy (o ce-k8s-mcp), **não** crie uma "só para liberar o mirante". A existência dela isola os pods e bloqueia todo o resto, inclusive o ALB atual.
+> - O k8s-mcp **já** é isolado: a policy dele só libera a `:7443`, o que bloqueia a `:8443` para todo o resto. Sem a regra `k8s-mcp-from-mirante`, o mirante não conecta. Validado em kind: sem a regra, bloqueado; com ela, conecta; outro pod sem o label `app: mirante`, continua bloqueado.
+> - Num MCP **sem** NetworkPolicy (o logs-mcp), **não** crie uma "só para liberar o mirante". A existência dela isola os pods e bloqueia todo o resto, inclusive o ALB atual.
 
-**3. Aponte o mirante para o headless** no ConfigMap (`MIRANTE_MCP`), atento ao caminho do MCP (hub-server na raiz; ce-k8s-mcp em `/mcp`):
+**3. Aponte o mirante para o headless** no ConfigMap (`MIRANTE_MCP`), atento ao caminho do MCP (k8s-mcp na raiz; logs-mcp em `/mcp`):
 
 ```
-k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc.cluster.local:8443
-ce-k8s-mcp=http://ce-k8s-mcp-headless.ce.svc.cluster.local:8080/mcp
+k8s-mcp=http://k8s-mcp-headless.mcp.svc.cluster.local:8443
+logs-mcp=http://logs-mcp-headless.ia.svc.cluster.local:8080/mcp
 ```
 
 Depois aplique a mudança com `kubectl -n observabilidade rollout restart deploy/mirante`.
@@ -311,7 +311,7 @@ Depois aplique a mudança com `kubectl -n observabilidade rollout restart deploy
 **5. Verifique.** Rode o diagnóstico pelo mirante (esperado: `sessoes_falhas=0`):
 
 ```bash
-kubectl -n k8s-ts-mcp run diag --rm -it --restart=Never --image=<registry>/mcp-sessoes:1 -- http://mirante.observabilidade:8080/p/diagnostico/mcp/k8s-ts-mcp 30
+kubectl -n mcp run diag --rm -it --restart=Never --image=<registry>/mcp-sessoes:1 -- http://mirante.observabilidade:8080/p/diagnostico/mcp/k8s-mcp 30
 ```
 
 O diagnóstico conversa com o mirante, e quem conversa com o MCP é o pod do mirante (que tem o label liberado), então ele pode rodar de qualquer namespace. No painel, **cada sessão MCP vira um run** ("sessão MCP XXXXXXXX"), fechado quando o cliente encerra a sessão. Sessões longas, como de um poller, viram um run novo a cada 200 chamadas.
@@ -326,7 +326,7 @@ O diagnóstico conversa com o mirante, e quem conversa com o MCP é o pod do mir
 
 > **Recomendação para os clientes:** reconectar a sessão MCP ao receber `session not found`. Isso já é necessário hoje em qualquer reinício de pod do MCP, com ou sem mirante.
 
-**Alternativa sem mirante:** se as tools do MCP não dependem de estado por sessão, ele pode rodar em modo sem sessão (`&mcp.StreamableHTTPOptions{Stateless: true}` no go-sdk), e qualquer réplica atende qualquer requisição. No hub-server, a identidade do agente é resolvida a partir do `Authorization` da sessão (`newSessionServer`). Avalie se essa resolução pode ser feita por requisição antes de mudar.
+**Alternativa sem mirante:** se as tools do MCP não dependem de estado por sessão, ele pode rodar em modo sem sessão (`&mcp.StreamableHTTPOptions{Stateless: true}` no go-sdk), e qualquer réplica atende qualquer requisição. No k8s-mcp, a identidade do agente é resolvida a partir do `Authorization` da sessão (`newSessionServer`). Avalie se essa resolução pode ser feita por requisição antes de mudar.
 
 ## 7. Modo sidecar (sem ponto único de falha)
 
@@ -375,7 +375,7 @@ Roda no mirante, sobre o que ele observa. Funciona igual para qualquer modelo.
 
 **Para `acao_nao_executada` não gerar falso positivo**, o mirante precisa saber quais tools executam ações. Ele usa três fontes, nesta ordem:
 
-1. `--action-tools troubleshoot,approve_action` (para tools cujo nome não diz, como o `troubleshoot` do k8s-ts-mcp, que deleta pod);
+1. `--action-tools troubleshoot,approve_action` (para tools cujo nome não diz, como o `troubleshoot` do k8s-mcp, que deleta pod);
 2. anotações MCP no `tools/list`: `readOnlyHint: false` ou `destructiveHint: true`. **Recomendado: anote suas tools no MCP server**;
 3. palavras no nome da tool (`scale_deployment`, `record_lesson`, `delete_pod`…), comparadas por token: `get_settings` não conta como "set".
 

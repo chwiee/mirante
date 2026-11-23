@@ -34,7 +34,7 @@ func mcpServer(t *testing.T, delay time.Duration) (*httptest.Server, *[]scanIn) 
 	t.Helper()
 	var mu sync.Mutex
 	got := &[]scanIn{}
-	s := mcp.NewServer(&mcp.Implementation{Name: "fake-k8s-ts-mcp", Version: "0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "fake-k8s-mcp", Version: "0"}, nil)
 	mcp.AddTool(s, &mcp.Tool{Name: "scan_cluster", Description: "scan"},
 		func(_ context.Context, _ *mcp.CallToolRequest, in scanIn) (*mcp.CallToolResult, scanOut, error) {
 			time.Sleep(delay)
@@ -138,18 +138,18 @@ func chat(t *testing.T, url string, body map[string]any) map[string]any {
 	return out
 }
 
-// O loop inteiro do wb-ce-agent, sem uma linha de SDK: só as URLs apontando
+// O loop inteiro do suporte-bot, sem uma linha de SDK: só as URLs apontando
 // para o mirante.
 func TestAgenteSemCodigoLLMMaisMCP(t *testing.T) {
 	mcpTS, received := mcpServer(t, 30*time.Millisecond)
 	llmTS := fakeOllama(t)
-	r := newRig(t, Config{LLM: map[string]string{"ollama": llmTS.URL}, MCP: map[string]string{"k8s-ts-mcp": mcpTS.URL},
+	r := newRig(t, Config{LLM: map[string]string{"ollama": llmTS.URL}, MCP: map[string]string{"k8s-mcp": mcpTS.URL},
 		InjectReasoning: true, RedactKeys: DefaultRedactKeys})
 
 	ctx := context.Background()
-	// 1) agente conecta no MCP pelo mirante e lista as tools (como no startup do wb-ce-agent)
-	client := mcp.NewClient(&mcp.Implementation{Name: "wb-ce-agent", Version: "0"}, nil)
-	cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/wb-ce-agent/mcp/k8s-ts-mcp"}, nil)
+	// 1) agente conecta no MCP pelo mirante e lista as tools (como no startup do suporte-bot)
+	client := mcp.NewClient(&mcp.Implementation{Name: "suporte-bot", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/suporte-bot/mcp/k8s-mcp"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,9 +161,9 @@ func TestAgenteSemCodigoLLMMaisMCP(t *testing.T) {
 	schema := lt.Tools[0].InputSchema
 
 	// 2) primeira rodada com o LLM
-	llmURL := r.url + "/p/wb-ce-agent/llm/ollama/api/chat"
+	llmURL := r.url + "/p/suporte-bot/llm/ollama/api/chat"
 	msgs := []any{
-		map[string]any{"role": "system", "content": "você é o wb-ce-agent"},
+		map[string]any{"role": "system", "content": "você é o suporte-bot"},
 		map[string]any{"role": "user", "content": "faz um scan no eks-a"},
 	}
 	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "scan_cluster", "description": "scan", "parameters": schema}}}
@@ -194,14 +194,14 @@ func TestAgenteSemCodigoLLMMaisMCP(t *testing.T) {
 	if len(*received) != 1 || (*received)[0].ClusterID != "eks-a" {
 		t.Fatalf("MCP server recebeu %+v", *received)
 	}
-	if run.Agent != "wb-ce-agent" || len(run.Steps) != 3 {
+	if run.Agent != "suporte-bot" || len(run.Steps) != 3 {
 		t.Fatalf("esperava decisão, tool, decisão — veio %d steps: %+v", len(run.Steps), run.Steps)
 	}
 	d, tool := run.Steps[0], run.Steps[1]
 	if d.Kind != "decision" || d.Model != "qwen2.5:7b" || d.TokensIn != 800 || d.Confidence == nil || *d.Confidence != 0.42 {
 		t.Fatalf("decisão: %+v", d)
 	}
-	if tool.Server != "k8s-ts-mcp" || tool.Tool != "scan_cluster" || tool.Rationale != "usuário pediu scan do eks-a" ||
+	if tool.Server != "k8s-mcp" || tool.Tool != "scan_cluster" || tool.Rationale != "usuário pediu scan do eks-a" ||
 		string(tool.Args) != `{"cluster_id":"eks-a"}` || tool.Status != "ok" || tool.DurationMs < 30 {
 		t.Fatalf("tool: %+v args=%s", tool, tool.Args)
 	}
@@ -219,12 +219,12 @@ func TestAgenteSemCodigoLLMMaisMCP(t *testing.T) {
 // Agente cujo LLM não passa pelo mirante (Bedrock, Claude Code…): só o MCP.
 func TestSoMCPViraRunSintetico(t *testing.T) {
 	mcpTS, _ := mcpServer(t, 0)
-	r := newRig(t, Config{MCP: map[string]string{"k8s-ts-mcp": mcpTS.URL}})
+	r := newRig(t, Config{MCP: map[string]string{"k8s-mcp": mcpTS.URL}})
 	r.px.corr.idleMCP = 50 * time.Millisecond
 
 	ctx := context.Background()
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "alfred", Version: "0"}, nil).
-		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/alfred/mcp/k8s-ts-mcp"}, nil)
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "ops-bot", Version: "0"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/ops-bot/mcp/k8s-mcp"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,8 +237,8 @@ func TestSoMCPViraRunSintetico(t *testing.T) {
 	}
 	cs.Close() // DELETE da sessão: o mirante fecha o run dela
 
-	run := r.waitRun(t, func(r *event.Run) bool { return r.Agent == "alfred" && r.Status == "ok" })
-	if len(run.Steps) != 2 || run.Steps[0].Server != "k8s-ts-mcp" || run.Steps[1].Status != "ok" {
+	run := r.waitRun(t, func(r *event.Run) bool { return r.Agent == "ops-bot" && r.Status == "ok" })
+	if len(run.Steps) != 2 || run.Steps[0].Server != "k8s-mcp" || run.Steps[1].Status != "ok" {
 		t.Fatalf("run sintético: %+v", run.Steps)
 	}
 	if len(run.Tools) != 1 || run.Tools[0].Name != "scan_cluster" {
@@ -251,7 +251,7 @@ func TestLLMForaDoArFechaRunComErro(t *testing.T) {
 	dead.Close()
 	r := newRig(t, Config{LLM: map[string]string{"openai": dead.URL}})
 	b := `{"model":"m","messages":[{"role":"user","content":"oi"}]}`
-	resp, err := http.Post(r.url+"/p/ce-aut/llm/openai/v1/chat/completions", "application/json", strings.NewReader(b))
+	resp, err := http.Post(r.url+"/p/triagem/llm/openai/v1/chat/completions", "application/json", strings.NewReader(b))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,10 +325,10 @@ func TestRedacao(t *testing.T) {
 // server real — que rejeita propriedade desconhecida — recebe a chamada limpa.
 func TestMCPRemoveCampoDeRaciocinioQueEscapou(t *testing.T) {
 	mcpTS, received := mcpServer(t, 0)
-	r := newRig(t, Config{MCP: map[string]string{"k8s-ts-mcp": mcpTS.URL}, InjectReasoning: true})
+	r := newRig(t, Config{MCP: map[string]string{"k8s-mcp": mcpTS.URL}, InjectReasoning: true})
 	ctx := context.Background()
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "x", Version: "0"}, nil).
-		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/x/mcp/k8s-ts-mcp"}, nil)
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/x/mcp/k8s-mcp"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,9 +348,9 @@ func TestMCPRemoveCampoDeRaciocinioQueEscapou(t *testing.T) {
 // no mapa — é o primeiro sinal de que a implantação funcionou.
 func TestConectarJaApareceNoMapa(t *testing.T) {
 	mcpTS, _ := mcpServer(t, 0)
-	r := newRig(t, Config{MCP: map[string]string{"k8s-ts-mcp": mcpTS.URL}})
+	r := newRig(t, Config{MCP: map[string]string{"k8s-mcp": mcpTS.URL}})
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "novo", Version: "0"}, nil).
-		Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: r.url + "/p/agente-novo/mcp/k8s-ts-mcp"}, nil)
+		Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: r.url + "/p/agente-novo/mcp/k8s-mcp"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestConectarJaApareceNoMapa(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, e := range r.srv.Store.Topology() {
-			if e.Agent == "agente-novo" && e.Server == "k8s-ts-mcp" && e.Tool == "scan_cluster" && e.Declared {
+			if e.Agent == "agente-novo" && e.Server == "k8s-mcp" && e.Tool == "scan_cluster" && e.Declared {
 				if runs, _ := r.srv.Store.Runs(); len(runs) != 0 {
 					t.Fatalf("listar tools não deveria criar run: %d", len(runs))
 				}
@@ -390,11 +390,11 @@ func TestUpstreamsExpoeURLSemCredencial(t *testing.T) {
 // "tool inexistente" (nó fantasma) para uma tool real.
 func TestSoMCPUmRunPorSessaoSemFantasma(t *testing.T) {
 	mcpTS, _ := mcpServer(t, 0)
-	r := newRig(t, Config{MCP: map[string]string{"k8s-ts-mcp": mcpTS.URL}})
+	r := newRig(t, Config{MCP: map[string]string{"k8s-mcp": mcpTS.URL}})
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		cs, err := mcp.NewClient(&mcp.Implementation{Name: "poller", Version: "0"}, nil).
-			Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/poller/mcp/k8s-ts-mcp"}, nil)
+			Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/poller/mcp/k8s-mcp"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

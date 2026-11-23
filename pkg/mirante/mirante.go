@@ -9,12 +9,12 @@
 //
 // Uso típico num loop de tool-calling:
 //
-//	mc := mirante.New(mirante.Config{URL: "http://mirante:8080", Agent: "wb-ce-agent"})
+//	mc := mirante.New(mirante.Config{URL: "http://mirante:8080", Agent: "suporte-bot"})
 //	defer mc.Close()
 //
 //	run := mc.StartRun(msg, toolSpecs)
 //	run.Decision(mirante.Decision{Model: "qwen2.5:7b", Chosen: []string{"troubleshoot"}, Duration: d})
-//	call := run.ToolCall(mirante.Call{Server: "k8s-ts-mcp", Tool: "troubleshoot", Args: args, Rationale: motivo, Confidence: &conf})
+//	call := run.ToolCall(mirante.Call{Server: "k8s-mcp", Tool: "troubleshoot", Args: args, Rationale: motivo, Confidence: &conf})
 //	call.End(result, err)
 //	run.End(reply, nil)
 package mirante
@@ -31,7 +31,7 @@ import (
 
 type Config struct {
 	URL   string // ex: http://mirante.observability:8080
-	Agent string // nome do agente no mapa (ex: "alfred", "wb-ce-agent")
+	Agent string // nome do agente no mapa (ex: "ops-bot", "suporte-bot")
 	Token string // opcional, se o servidor roda com --ingest-token
 
 	BufferSize    int           // default 4096
@@ -157,7 +157,7 @@ type ToolSpec struct {
 	Description string         `json:"description,omitempty"`
 	Schema      map[string]any `json:"schema,omitempty"`
 	// ReadOnly: false se a tool altera algo (reinicia, aplica, deleta…), mesmo
-	// que o nome não diga — ex: troubleshoot do k8s-ts-mcp. Evita falso
+	// que o nome não diga — ex: troubleshoot do k8s-mcp. Evita falso
 	// positivo de "acao_nao_executada".
 	ReadOnly *bool `json:"read_only,omitempty"`
 }

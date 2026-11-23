@@ -9,9 +9,9 @@
 //
 // Uso:
 //   const m = new Mirante(process.env.MIRANTE_URL, "meu-agente");
-//   const run = m.startRun(pergunta, [{ server: "k8s-ts-mcp", name: "scan_cluster", schema: {...} }]);
+//   const run = m.startRun(pergunta, [{ server: "k8s-mcp", name: "scan_cluster", schema: {...} }]);
 //   run.decision({ model: "gpt-4o", reasoning: texto, chosen: ["scan_cluster"], durationMs: 812 });
-//   const span = run.toolCall("k8s-ts-mcp", "scan_cluster", { cluster_id: "x" }, "porque...");
+//   const span = run.toolCall("k8s-mcp", "scan_cluster", { cluster_id: "x" }, "porque...");
 //   span.end(resultado);                 // ou span.end(undefined, erro)
 //   run.end(resposta);                   // ou run.end("", erro)
 //   await m.close();                     // no shutdown: envia o que falta

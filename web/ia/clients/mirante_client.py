@@ -7,9 +7,9 @@ Manda eventos para POST /v1/events. Regras:
 
 Uso:
     m = Mirante(os.getenv("MIRANTE_URL"), agent="meu-agente")
-    run = m.start_run(pergunta, tools=[{"server": "k8s-ts-mcp", "name": "scan_cluster", "schema": {...}}])
+    run = m.start_run(pergunta, tools=[{"server": "k8s-mcp", "name": "scan_cluster", "schema": {...}}])
     run.decision(model="gpt-4o", reasoning=texto, chosen=["scan_cluster"], duration_ms=812)
-    span = run.tool_call("k8s-ts-mcp", "scan_cluster", {"cluster_id": "x"}, rationale="...")
+    span = run.tool_call("k8s-mcp", "scan_cluster", {"cluster_id": "x"}, rationale="...")
     span.end(result=resultado)            # ou span.end(error=exc)
     run.end(resposta)                     # ou run.end(error=exc)
     m.close()                             # no shutdown: envia o que falta

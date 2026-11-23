@@ -18,7 +18,7 @@ func codes(fs []event.Flag) string {
 	return strings.Join(c, ",")
 }
 
-var scan = event.ToolSpec{Server: "k8s-ts-mcp", Name: "scan_cluster", Schema: map[string]any{
+var scan = event.ToolSpec{Server: "k8s-mcp", Name: "scan_cluster", Schema: map[string]any{
 	"type": "object", "required": []any{"cluster_id"}, "additionalProperties": false,
 	"properties": map[string]any{"cluster_id": map[string]any{"type": "string"}, "tail": map[string]any{"type": "integer"},
 		"mode": map[string]any{"type": "string", "enum": []any{"fast", "deep"}}},
@@ -30,8 +30,8 @@ func TestToolCall(t *testing.T) {
 		step event.Step
 		want string
 	}{
-		{"ok", event.Step{Server: "k8s-ts-mcp", Tool: "scan_cluster", Args: json.RawMessage(`{"cluster_id":"a"}`), Confidence: conf(0.9)}, ""},
-		{"tool inventada", event.Step{Server: "k8s-ts-mcp", Tool: "restart_cluster", Args: json.RawMessage(`{}`)}, "hallucination:tool_inexistente"},
+		{"ok", event.Step{Server: "k8s-mcp", Tool: "scan_cluster", Args: json.RawMessage(`{"cluster_id":"a"}`), Confidence: conf(0.9)}, ""},
+		{"tool inventada", event.Step{Server: "k8s-mcp", Tool: "restart_cluster", Args: json.RawMessage(`{}`)}, "hallucination:tool_inexistente"},
 		{"arg faltando e arg inventado", event.Step{Tool: "scan_cluster", Args: json.RawMessage(`{"cluster":"a"}`)},
 			"hallucination:args_invalidos,hallucination:args_invalidos"},
 		{"tipo e enum", event.Step{Tool: "scan_cluster", Args: json.RawMessage(`{"cluster_id":"a","tail":1.5,"mode":"turbo"}`)},
@@ -57,18 +57,18 @@ func TestToolCallSemToolsDeclaradasNaoAcusa(t *testing.T) {
 	}
 }
 
-// Lab do MidTS: o cliente listou só as tools do mid-collector e chamou
-// buscar_incidentes no midts-conhecimento. A lista do run não é daquele
+// Caso real: o cliente listou só as tools do coletor-mcp e chamou
+// buscar_incidentes no conhecimento-mcp. A lista do run não é daquele
 // server, então não prova nada; com a lista do server (descoberta), prova.
 func TestToolCallDeOutroServerSoContraListaDele(t *testing.T) {
-	collector := event.ToolSpec{Server: "mid-collector", Name: "list_collectors"}
-	s := &event.Step{Kind: "tool", Server: "midts-conhecimento", Tool: "buscar_incidentes", Args: json.RawMessage(`{}`)}
+	collector := event.ToolSpec{Server: "coletor-mcp", Name: "list_collectors"}
+	s := &event.Step{Kind: "tool", Server: "conhecimento-mcp", Tool: "buscar_incidentes", Args: json.RawMessage(`{}`)}
 	run := &event.Run{Tools: []event.ToolSpec{collector}, Steps: []*event.Step{s}}
 	if f := Default.ToolCall(run, s); len(f) != 0 {
-		t.Fatalf("sem lista do midts-conhecimento não dá pra acusar, veio %v", f)
+		t.Fatalf("sem lista do conhecimento-mcp não dá pra acusar, veio %v", f)
 	}
 
-	run.Tools = append(run.Tools, event.ToolSpec{Server: "midts-conhecimento", Name: "buscar_incidentes"})
+	run.Tools = append(run.Tools, event.ToolSpec{Server: "conhecimento-mcp", Name: "buscar_incidentes"})
 	if f := Default.ToolCall(run, s); len(f) != 0 {
 		t.Fatalf("tool existe no server, veio %v", f)
 	}

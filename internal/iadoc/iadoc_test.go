@@ -42,7 +42,7 @@ func TestDocsIAEmDia(t *testing.T) {
 func TestVersaoVivaTrazDadosReais(t *testing.T) {
 	d := FromUpstreams("https://mirante.interno/", map[string]any{
 		"llm_urls":         map[string]string{"ollama": "http://ollama:11434"},
-		"mcp_urls":         map[string]string{"k8s-ts-mcp": "http://hub:8443/mcp", "knowledge-mcp": "http://k:8444"},
+		"mcp_urls":         map[string]string{"k8s-mcp": "http://hub:8443/mcp", "knowledge-mcp": "http://k:8444"},
 		"inject_reasoning": true,
 	})
 	md, err := Markdown(d)
@@ -52,7 +52,7 @@ func TestVersaoVivaTrazDadosReais(t *testing.T) {
 	for _, want := range []string{
 		"Gerado pelo mirante em **https://mirante.interno**",
 		"`ollama` → `http://ollama:11434`",
-		"`k8s-ts-mcp` → `http://hub:8443/mcp`",
+		"`k8s-mcp` → `http://hub:8443/mcp`",
 		"https://mirante.interno/p/<agente>/llm/ollama/v1",
 		"**ligada**",
 		"class Mirante:",         // cliente Python embutido
@@ -65,8 +65,8 @@ func TestVersaoVivaTrazDadosReais(t *testing.T) {
 	if strings.Contains(md, "[[") || strings.Contains(md, "<no value>") {
 		t.Error("template mal renderizado")
 	}
-	// knowledge-mcp antes de k8s-ts-mcp? ordenado por nome: k8s < knowledge
-	if strings.Index(md, "`k8s-ts-mcp` →") > strings.Index(md, "`knowledge-mcp` →") {
+	// knowledge-mcp antes de k8s-mcp? ordenado por nome: k8s < knowledge
+	if strings.Index(md, "`k8s-mcp` →") > strings.Index(md, "`knowledge-mcp` →") {
 		t.Error("upstreams deveriam vir ordenados")
 	}
 }

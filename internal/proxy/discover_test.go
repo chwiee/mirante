@@ -13,9 +13,9 @@ import (
 	"github.com/chwiee/mirante/internal/event"
 )
 
-// MCP em /mcp exigindo Bearer (como o ce-k8s-mcp).
+// MCP em /mcp exigindo Bearer (como o logs-mcp).
 func mcpComToken(t *testing.T, token string) *httptest.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "ce", Version: "0"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "logs-mcp", Version: "0"}, nil)
 	mcp.AddTool(s, &mcp.Tool{Name: "logs"}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
 		return nil, struct{}{}, nil
 	})
@@ -54,22 +54,22 @@ func TestDescobertaMostraMCPAoSubir(t *testing.T) {
 
 	// sem token: não aparece (e não trava nada)
 	ctx, cancel := context.WithCancel(context.Background())
-	go r.px.Discover(ctx, "ce-k8s-mcp", up.URL, "")
+	go r.px.Discover(ctx, "logs-mcp", up.URL, "")
 	time.Sleep(300 * time.Millisecond)
 	cancel()
-	if len(topoDe(r, "ce-k8s-mcp")) != 0 {
+	if len(topoDe(r, "logs-mcp")) != 0 {
 		t.Fatal("sem token não deveria descobrir nada")
 	}
 
 	// com token, URL sem caminho: acha /mcp sozinho
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
-	go r.px.Discover(ctx, "ce-k8s-mcp", up.URL, "s3cr3t")
+	go r.px.Discover(ctx, "logs-mcp", up.URL, "s3cr3t")
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && len(topoDe(r, "ce-k8s-mcp")) < 2 {
+	for time.Now().Before(deadline) && len(topoDe(r, "logs-mcp")) < 2 {
 		time.Sleep(20 * time.Millisecond)
 	}
-	got := topoDe(r, "ce-k8s-mcp")
+	got := topoDe(r, "logs-mcp")
 	if !got["/logs"] || !got["/status"] {
 		t.Fatalf("topologia após descoberta: %v", got)
 	}
@@ -79,7 +79,7 @@ func TestDescobertaMostraMCPAoSubir(t *testing.T) {
 
 	// cliente que não chama tools/list: a lista descoberta vale para checar
 	// tool inventada (antes: sem lista, nada a checar)
-	front := httptest.NewServer(r.px.Front("ce-k8s-mcp", up.URL))
+	front := httptest.NewServer(r.px.Front("logs-mcp", up.URL))
 	defer front.Close()
 	hc := &http.Client{Transport: headerRT{"Authorization", "Bearer s3cr3t"}}
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "cliente-x", Version: "1"}, nil).
@@ -125,57 +125,57 @@ func mcpCom(t *testing.T, tools ...string) *httptest.Server {
 	return ts
 }
 
-// Reproduz o lab do MidTS: o cliente chama tools/list só no mid-collector e
-// depois chama buscar_incidentes no midts-conhecimento, sem listar ali. Antes,
+// Reproduz um caso real: o cliente chama tools/list só no coletor-mcp e
+// depois chama buscar_incidentes no conhecimento-mcp, sem listar ali. Antes,
 // as 100 chamadas saíam como tool_inexistente ("não está entre as tools
 // disponíveis (list_collectors, ...)"). Agora as tools descobertas do
-// midts-conhecimento entram no run na 1ª chamada a ele.
+// conhecimento-mcp entram no run na 1ª chamada a ele.
 func TestClienteSemToolsListNoServerUsaDescoberta(t *testing.T) {
 	collector := mcpCom(t, "list_collectors", "get_queue_depth")
 	conhecimento := mcpCom(t, "buscar_incidentes", "registrar_licao")
-	r := newRig(t, Config{MCP: map[string]string{"mid-collector": collector.URL, "midts-conhecimento": conhecimento.URL}})
+	r := newRig(t, Config{MCP: map[string]string{"coletor-mcp": collector.URL, "conhecimento-mcp": conhecimento.URL}})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go r.px.Discover(ctx, "midts-conhecimento", conhecimento.URL, "")
+	go r.px.Discover(ctx, "conhecimento-mcp", conhecimento.URL, "")
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && len(topoDe(r, "midts-conhecimento")) < 2 {
+	for time.Now().Before(deadline) && len(topoDe(r, "conhecimento-mcp")) < 2 {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(topoDe(r, "midts-conhecimento")) < 2 {
-		t.Fatal("descoberta do midts-conhecimento não aconteceu")
+	if len(topoDe(r, "conhecimento-mcp")) < 2 {
+		t.Fatal("descoberta do conhecimento-mcp não aconteceu")
 	}
 
 	connect := func(server string) *mcp.ClientSession {
-		cs, err := mcp.NewClient(&mcp.Implementation{Name: "midts", Version: "0"}, nil).
-			Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/midts/mcp/" + server}, nil)
+		cs, err := mcp.NewClient(&mcp.Implementation{Name: "agente-x", Version: "0"}, nil).
+			Connect(ctx, &mcp.StreamableClientTransport{Endpoint: r.url + "/p/agente-x/mcp/" + server}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return cs
 	}
-	cs := connect("mid-collector")
+	cs := connect("coletor-mcp")
 	if _, err := cs.ListTools(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	cs.Close()
 
-	cs = connect("midts-conhecimento") // sem ListTools de propósito
+	cs = connect("conhecimento-mcp") // sem ListTools de propósito
 	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "buscar_incidentes"}); err != nil {
 		t.Fatal(err)
 	}
 	cs.CallTool(ctx, &mcp.CallToolParams{Name: "apagar_incidentes"})
 	cs.Close()
 
-	run := r.waitRun(t, func(x *event.Run) bool { return x.Agent == "midts" && x.Status == "ok" && len(x.Steps) == 2 })
+	run := r.waitRun(t, func(x *event.Run) bool { return x.Agent == "agente-x" && x.Status == "ok" && len(x.Steps) == 2 })
 	if f := run.Steps[0].Flags; len(f) != 0 {
-		t.Fatalf("buscar_incidentes existe no midts-conhecimento e virou alerta: %+v", f)
+		t.Fatalf("buscar_incidentes existe no conhecimento-mcp e virou alerta: %+v", f)
 	}
 	if f := run.Steps[1].Flags; len(f) == 0 || f[0].Code != "tool_inexistente" {
 		t.Fatalf("apagar_incidentes não existe no server e não foi sinalizada: %+v", f)
 	}
 	for _, e := range r.srv.Store.Topology() {
-		if e.Agent == "midts" && e.Tool == "buscar_incidentes" && !e.Declared {
+		if e.Agent == "agente-x" && e.Tool == "buscar_incidentes" && !e.Declared {
 			t.Fatalf("tool real marcada como fantasma no mapa: %+v", e)
 		}
 	}

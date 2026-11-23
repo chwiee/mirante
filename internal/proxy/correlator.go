@@ -358,9 +358,9 @@ func (c *correlator) mcpCallStart(agent, server, tool, sessionKey string, args j
 }
 
 // serverTools devolve, uma vez por run, as tools que o mirante descobriu do
-// server — para quando o cliente não chamou tools/list NELE. Visto no lab do
-// MidTS: o cliente listou só o mid-collector e cada chamada ao
-// midts-conhecimento saía como tool_inexistente. Sem descoberta do server,
+// server — para quando o cliente não chamou tools/list NELE. Visto num lab
+// com dois MCPs: o cliente listou só o coletor-mcp e cada chamada ao
+// conhecimento-mcp saía como tool_inexistente. Sem descoberta do server,
 // devolve nada e tenta de novo na próxima chamada.
 func (c *correlator) serverTools(r *mcpRun, server string) []event.ToolSpec {
 	if r.servers[server] {

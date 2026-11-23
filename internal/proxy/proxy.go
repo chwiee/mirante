@@ -35,7 +35,7 @@ var DefaultRedactKeys = regexp.MustCompile(`(?i)(pass(word|wd)?|secret|token|api
 
 type Config struct {
 	LLM             map[string]string // nome → URL base (ex: ollama → http://ollama:11434)
-	MCP             map[string]string // server → endpoint (ex: k8s-ts-mcp → http://hub:8443/mcp)
+	MCP             map[string]string // server → endpoint (ex: k8s-mcp → http://hub:8443/mcp)
 	InjectReasoning bool              // injeta reason/confidence nas tools (só requisições sem stream)
 	RedactKeys      *regexp.Regexp    // nil = não redige
 	Emit            func(*event.Event)

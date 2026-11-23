@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"syscall"
@@ -63,24 +64,42 @@ func (u upstreams) Set(v string) error {
 	return nil
 }
 
+// version vem do build de release (-ldflags "-X main.version=v1.2.3"). Sem
+// isso, usa a versão do módulo quando instalado com go install ...@vX.
+var version = "dev"
+
+func versionString() string {
+	if version == "dev" {
+		if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+			return bi.Main.Version
+		}
+	}
+	return version
+}
+
 func main() {
 	llm, mcp := upstreams{}, upstreams{}
+	showVersion := flag.Bool("version", false, "mostra a versão e sai")
 	addr := flag.String("addr", envOr("MIRANTE_ADDR", ":8080"), "endereço HTTP")
 	maxRuns := flag.Int("max-runs", 500, "quantos runs manter em memória")
 	minConf := flag.Float64("min-confidence", detect.Default.MinConfidence, "confiança abaixo disso vira incerteza (0 desliga)")
 	margin := flag.Float64("ambiguity-margin", detect.Default.AmbiguityMargin, "diferença mínima de score entre escolhida e alternativa")
 	actionTools := flag.String("action-tools", os.Getenv("MIRANTE_ACTION_TOOLS"), "tools que executam ações mesmo sem o nome dizer, separadas por vírgula (ex: troubleshoot,approve_action)")
 	token := flag.String("ingest-token", os.Getenv("MIRANTE_INGEST_TOKEN"), "bearer token exigido em /v1/events (vazio = aberto)")
-	demoMode := flag.Bool("demo", false, "gera tráfego sintético com as tools reais do ecossistema")
+	demoMode := flag.Bool("demo", false, "gera tráfego sintético para ver o painel sem nenhum agente conectado")
 	flag.Var(llm, "llm", "upstream de LLM para o proxy, nome=url (repetível; env MIRANTE_LLM)")
 	flag.Var(mcp, "mcp", "upstream MCP para o proxy, server=url (repetível; env MIRANTE_MCP)")
 	inject := flag.Bool("inject-reasoning", os.Getenv("MIRANTE_INJECT_REASONING") == "true", "proxy injeta reason/confidence no schema das tools e remove na resposta")
 	redact := flag.String("redact-keys", envOr("MIRANTE_REDACT_KEYS", proxy.DefaultRedactKeys.String()), "regex de chaves JSON redigidas no proxy (vazio desliga)")
 	eventsURL := flag.String("events-url", os.Getenv("MIRANTE_EVENTS_URL"), "modo sidecar: manda eventos do proxy para este mirante central")
 	publicURL := flag.String("public-url", os.Getenv("MIRANTE_PUBLIC_URL"), "URL pela qual os agentes alcançam este mirante (vai nas instruções para IA em /ia; vazio = deduz da requisição)")
-	front := flag.String("front", os.Getenv("MIRANTE_FRONT"), "modo front: o mirante se passa pelo MCP server, na mesma URL que os clientes já usam (server=URL; ex: k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc:8443). Clientes não mudam nada; o nome do cliente vem do initialize. O caminho na URL (ex: /mcp) é usado só para o mirante descobrir as tools ao subir; o caminho do cliente é sempre preservado")
+	front := flag.String("front", os.Getenv("MIRANTE_FRONT"), "modo front: o mirante se passa pelo MCP server, na mesma URL que os clientes já usam (server=URL; ex: k8s-mcp=http://k8s-mcp-headless.mcp.svc:8443). Clientes não mudam nada; o nome do cliente vem do initialize. O caminho na URL (ex: /mcp) é usado só para o mirante descobrir as tools ao subir; o caminho do cliente é sempre preservado")
 	frontAddr := flag.String("front-addr", envOr("MIRANTE_FRONT_ADDR", ":8081"), "porta do modo front (o Service/Ingress do MCP aponta para ela)")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("mirante", versionString())
+		return
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	for env, dst := range map[string]upstreams{"MIRANTE_LLM": llm, "MIRANTE_MCP": mcp} {
@@ -156,7 +175,13 @@ func main() {
 	if *eventsURL != "" {
 		mode = "sidecar → " + *eventsURL
 	}
-	log.Info("mirante no ar", "url", base, "modo", mode, "llm", llm.String(), "mcp", mcp.String(), "inject_reasoning", *inject, "demo", *demoMode)
+	log.Info("mirante no ar", "versao", versionString(), "url", base, "modo", mode, "llm", llm.String(), "mcp", mcp.String(), "inject_reasoning", *inject, "demo", *demoMode)
+	if srv != nil && !loopback(ln.Addr()) {
+		// sem login próprio: quem sobe em 0.0.0.0 precisa saber que payloads
+		// das tools ficam visíveis para qualquer um que alcance a porta.
+		log.Warn("o painel não tem autenticação e mostra argumentos/retornos das tools: exponha só em rede interna ou atrás de um proxy com SSO",
+			"addr", ln.Addr().String(), "ingest_token", *token != "", "local_apenas", "--addr 127.0.0.1:8080")
+	}
 
 	// descoberta: o mirante se conecta a cada MCP configurado e mostra server +
 	// tools no mapa ao subir, antes de qualquer cliente passar. Tokens só para
@@ -214,6 +239,12 @@ func main() {
 		fs.Shutdown(shut)
 	}
 	closeFn()
+}
+
+// loopback diz se o endereço só aceita conexões da própria máquina.
+func loopback(a net.Addr) bool {
+	tcp, ok := a.(*net.TCPAddr)
+	return ok && tcp.IP.IsLoopback()
 }
 
 func displayAddr(a string) string {

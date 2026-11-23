@@ -20,20 +20,20 @@
 #   http://mirante.observabilidade:8080/p/<agente>/mcp/<server>
 # Para desfazer: voltar a URL dos clientes; estes recursos podem ficar.
 
-# ─────────────────────────── k8s-ts-mcp (hub-server) ───────────────────────────
+# ─────────────────────────── k8s-mcp (k8s-mcp) ───────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
-  name: hub-server-mcp-headless
-  namespace: k8s-ts-mcp
-  labels: {app: hub-server, mirante: upstream}
+  name: k8s-mcp-headless
+  namespace: mcp
+  labels: {app: k8s-mcp, mirante: upstream}
 spec:
   clusterIP: None            # headless: um registro DNS por pod pronto
-  selector: {app: hub-server}
+  selector: {app: k8s-mcp}
   ports:
     - {name: mcp-http, port: 8443, targetPort: mcp-http}
 ---
-# O hub-server JÁ é isolado pela NetworkPolicy "hub-server-grpc-internal-only"
+# O k8s-mcp JÁ é isolado pela NetworkPolicy "k8s-mcp-internal-only"
 # (só libera :7443 de dentro do namespace — o que, pela semântica de
 # NetworkPolicy, bloqueia a :8443 para todo o resto). Esta regra soma-se a ela
 # e libera a :8443 só para os pods do mirante. Validado em kind: sem ela, o
@@ -42,10 +42,10 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: hub-server-mcp-from-mirante
-  namespace: k8s-ts-mcp
+  name: k8s-mcp-from-mirante
+  namespace: mcp
 spec:
-  podSelector: {matchLabels: {app: hub-server}}
+  podSelector: {matchLabels: {app: k8s-mcp}}
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -53,28 +53,28 @@ spec:
           podSelector: {matchLabels: {app: mirante}}
       ports: [{protocol: TCP, port: 8443}]
 ---
-# ─────────────────────────────── ce-k8s-mcp ───────────────────────────────
+# ─────────────────────────────── logs-mcp ───────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
-  name: ce-k8s-mcp-headless
-  namespace: ce
-  labels: {app: ce-k8s-mcp, mirante: upstream}
+  name: logs-mcp-headless
+  namespace: ia
+  labels: {app: logs-mcp, mirante: upstream}
 spec:
   clusterIP: None
-  selector: {app: ce-k8s-mcp}
+  selector: {app: logs-mcp}
   ports:
     - {name: http, port: 8080, targetPort: http}   # porta do POD (o Service normal expõe 80 → http)
-# SEM NetworkPolicy aqui, de propósito: o ce-k8s-mcp não tem nenhuma hoje, e
+# SEM NetworkPolicy aqui, de propósito: o logs-mcp não tem nenhuma hoje, e
 # criar uma (mesmo só "liberando o mirante") ISOLARIA os pods — tudo que não
 # for o mirante passaria a ser bloqueado, inclusive o ALB atual.
 ---
 # ───────────────────── upstreams no mirante (ConfigMap) ─────────────────────
 # Em deploy/k8s/mirante.yaml, MIRANTE_MCP deve apontar para os headless.
-# Atenção ao caminho: o hub-server serve MCP na raiz; o ce-k8s-mcp em /mcp.
+# Atenção ao caminho: o k8s-mcp serve MCP na raiz; o logs-mcp em /mcp.
 #
-#   MIRANTE_MCP: "k8s-ts-mcp=http://hub-server-mcp-headless.k8s-ts-mcp.svc.cluster.local:8443,ce-k8s-mcp=http://ce-k8s-mcp-headless.ce.svc.cluster.local:8080/mcp"
+#   MIRANTE_MCP: "k8s-mcp=http://k8s-mcp-headless.mcp.svc.cluster.local:8443,logs-mcp=http://logs-mcp-headless.ia.svc.cluster.local:8080/mcp"
 #
 # Tokens (Authorization: Bearer …) passam intactos pelo mirante: o
-# ce-k8s-mcp continua validando o CE_K8S_MCP_TOKEN do cliente e o hub-server
+# logs-mcp continua validando o LOGS_MCP_TOKEN do cliente e o k8s-mcp
 # continua resolvendo a identidade do agente pelo header, como hoje.

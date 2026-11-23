@@ -18,7 +18,7 @@ type quemOut struct {
 }
 
 // réplica de MCP server stateful (opções padrão do go-sdk, como o
-// hub-server do k8s-ts-mcp e o ce-k8s-mcp).
+// k8s-mcp do k8s-mcp e o logs-mcp).
 func replicaMCP(t *testing.T, name string) *httptest.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "eco", Version: "0"}, nil)
 	mcp.AddTool(s, &mcp.Tool{Name: "quem"}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, quemOut, error) {
@@ -159,7 +159,7 @@ func TestAfinidadePodMorre(t *testing.T) {
 }
 
 func TestAfinidadeNaoMexeEmServiceComum(t *testing.T) {
-	for _, up := range []string{"https://hub.empresa.com/mcp", "http://10.0.0.5:8443/mcp"} {
+	for _, up := range []string{"https://hub.example.com/mcp", "http://10.0.0.5:8443/mcp"} {
 		if a := newAffinity(up); !a.disabled {
 			t.Errorf("%s: afinidade deveria ficar desligada", up)
 		}
@@ -180,7 +180,7 @@ func TestAfinidadePreservaHost(t *testing.T) {
 	}))
 	defer up.Close()
 	r := newRig(t, Config{
-		MCP:    map[string]string{"x": "http://mcp-interno.empresa.com:8443/mcp"},
+		MCP:    map[string]string{"x": "http://mcp-interno.example.com:8443/mcp"},
 		lookup: func(context.Context, string) ([]string, error) { return []string{up.Listener.Addr().String()}, nil },
 	})
 	resp, err := http.Post(r.url+"/p/a/mcp/x", "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
@@ -188,7 +188,7 @@ func TestAfinidadePreservaHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if h, _ := gotHost.Load().(string); h != "mcp-interno.empresa.com:8443" {
+	if h, _ := gotHost.Load().(string); h != "mcp-interno.example.com:8443" {
 		t.Fatalf("Host recebido pelo upstream = %q, quer o nome original", h)
 	}
 }

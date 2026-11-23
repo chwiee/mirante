@@ -12,8 +12,8 @@
 // Uso (de dentro do cluster, para passar pelo kube-proxy):
 //
 //	mcp-sessoes <endpoint MCP> [sessões=30] [tool=primeira de tools/list]
-//	mcp-sessoes http://hub-server-mcp.k8s-ts-mcp.svc:8443 30
-//	mcp-sessoes http://mirante.observabilidade:8080/p/diagnostico/mcp/k8s-ts-mcp 30
+//	mcp-sessoes http://k8s-mcp.mcp.svc:8443 30
+//	mcp-sessoes http://mirante.observabilidade:8080/p/diagnostico/mcp/k8s-mcp 30
 //
 // Para MCP com autenticação, defina MCP_BEARER_TOKEN.
 package main

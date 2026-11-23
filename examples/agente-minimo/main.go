@@ -1,5 +1,5 @@
 // agente-minimo é um agente de tool-calling comum (Ollama + MCP), no mesmo
-// formato do wb-ce-agent — e que NÃO importa nada do mirante.
+// formato mais comum (loop de tool-calling) — e que NÃO importa nada do mirante.
 //
 // Ele existe para provar o modo plug-and-play: para aparecer no painel basta
 // apontar as URLs para o mirante. Compare:

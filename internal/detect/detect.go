@@ -33,7 +33,7 @@ type Config struct {
 	// disso da escolhida, vira "escolha_ambigua".
 	AmbiguityMargin float64
 	// ActionTools: tools que executam ações mesmo sem o nome dizer (ex:
-	// troubleshoot do k8s-ts-mcp, que deleta pod). Somam-se às anotações MCP
+	// troubleshoot do k8s-mcp, que deleta pod). Somam-se às anotações MCP
 	// (readOnlyHint=false / destructiveHint=true) e às palavras-chave do nome.
 	ActionTools []string
 }

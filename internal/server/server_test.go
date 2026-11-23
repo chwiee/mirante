@@ -50,11 +50,11 @@ func TestSDKPontaAPonta(t *testing.T) {
 		t.Fatalf("primeiro evento SSE = %q, quer snapshot", got)
 	}
 
-	mc := mirante.New(mirante.Config{URL: ts.URL, Agent: "wb-ce-agent", Token: "segredo", FlushInterval: 10 * time.Millisecond})
-	run := mc.StartRun("scan no eks-a", []mirante.ToolSpec{{Server: "k8s-ts-mcp", Name: "scan_cluster",
+	mc := mirante.New(mirante.Config{URL: ts.URL, Agent: "suporte-bot", Token: "segredo", FlushInterval: 10 * time.Millisecond})
+	run := mc.StartRun("scan no eks-a", []mirante.ToolSpec{{Server: "k8s-mcp", Name: "scan_cluster",
 		Schema: map[string]any{"type": "object", "required": []any{"cluster_id"}, "properties": map[string]any{"cluster_id": map[string]any{"type": "string"}}}}})
 	run.Decision(mirante.Decision{Model: "qwen2.5:7b", Chosen: []string{"restart_cluster"}, Confidence: mirante.Conf(0.9)})
-	call := run.ToolCall(mirante.Call{Server: "k8s-ts-mcp", Tool: "restart_cluster", Args: map[string]any{"cluster_id": "eks-a"}, Rationale: "reiniciar"})
+	call := run.ToolCall(mirante.Call{Server: "k8s-mcp", Tool: "restart_cluster", Args: map[string]any{"cluster_id": "eks-a"}, Rationale: "reiniciar"})
 	call.End(nil, errors.New(`ferramenta "restart_cluster" não existe`))
 	run.End("Reiniciei o eks-a e o pod api-99x subiu.", nil)
 	mc.Close()
@@ -188,8 +188,8 @@ func TestInstrucaoIAServidaComURLReal(t *testing.T) {
 		t.Fatalf("doc viva sem URL/upstreams reais:\n%.400s", md)
 	}
 	// atrás de Ingress TLS, a URL tem que ser a pública, não a do pod
-	md = get("/ia/claude/SKILL.md", map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "mirante.empresa.com"})
-	if !strings.HasPrefix(md, "---\nname: integrar-mirante") || !strings.Contains(md, "https://mirante.empresa.com/p/<agente>/llm/ollama") {
+	md = get("/ia/claude/SKILL.md", map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "mirante.example.com"})
+	if !strings.HasPrefix(md, "---\nname: integrar-mirante") || !strings.Contains(md, "https://mirante.example.com/p/<agente>/llm/ollama") {
 		t.Fatalf("skill atrás de ingress:\n%.300s", md)
 	}
 	if k := get("/ia/kiro/mirante.md", nil); !strings.HasPrefix(k, "---\ninclusion: manual") {

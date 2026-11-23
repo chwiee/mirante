@@ -45,9 +45,9 @@ echo "3. ingestão + detecção (run sintético com uma alucinação plantada)"
 RUN="validacao-$(date +%s)"
 EVENTS='[
  {"type":"run_start","run_id":"'$RUN'","agent":"validar.sh","input":"reinicia o pod api-1 no eks-a",
-  "tools":[{"server":"k8s-ts-mcp","name":"scan_cluster","schema":{"type":"object","required":["cluster_id"],"properties":{"cluster_id":{"type":"string"}}}}]},
+  "tools":[{"server":"k8s-mcp","name":"scan_cluster","schema":{"type":"object","required":["cluster_id"],"properties":{"cluster_id":{"type":"string"}}}}]},
  {"type":"decision","run_id":"'$RUN'","span_id":"d1","model":"validacao","chosen":["restart_cluster"],"confidence":0.9,"duration_ms":10},
- {"type":"tool_call","run_id":"'$RUN'","span_id":"t1","server":"k8s-ts-mcp","tool":"restart_cluster","args":{"cluster_id":"eks-a"}},
+ {"type":"tool_call","run_id":"'$RUN'","span_id":"t1","server":"k8s-mcp","tool":"restart_cluster","args":{"cluster_id":"eks-a"}},
  {"type":"tool_result","run_id":"'$RUN'","span_id":"t1","error":"tool não existe","duration_ms":5},
  {"type":"run_end","run_id":"'$RUN'","output":"Reiniciei o pod api-1."}
 ]'
